@@ -1,0 +1,83 @@
+@import "tailwindcss";
+@source "../node_modules/streamdown/dist/*.js";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: light;
+  /*
+   * Zap theme — Zap Trade's brand greens on light surfaces (brand history:
+   * deep green #001908 console color, #17be5f accent). Deep forest primary
+   * holds AA on white; the bright accent is reserved for status dots and
+   * positive P&L. Light-only for v1.
+   */
+  --background: #ffffff;
+  --foreground: #14201a;
+  --card: #ffffff;
+  --card-foreground: #14201a;
+  --popover: #ffffff;
+  --popover-foreground: #14201a;
+  --primary: #0c6b3d;
+  --primary-foreground: #ffffff;
+  --secondary: #e3f3ea;
+  --secondary-foreground: #0c6b3d;
+  --muted: #eef2ef;
+  --muted-foreground: #6f7d75;
+  --accent: #eef2ef;
+  --accent-foreground: #14201a;
+  --destructive: #b3261e;
+  --border: #e2e8e4;
+  --input: #e2e8e4;
+  --ring: #0c6b3d;
+  --radius: 0.625rem; /* 10px */
+  --sidebar: #f4f7f5;
+  --sidebar-foreground: #14201a;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--background);
+  font-family: var(--font-sans);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}

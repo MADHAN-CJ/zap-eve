@@ -1,0 +1,26 @@
+# Local-dev Postgres for zap-eve-agent (users, broker connections, chat
+# history). Production uses Neon. Host port 5438 — the copilot-family repos
+# each pin a unique port (5433 trophy … 5437 deel; 5438 is ours) and an
+# explicit compose `name:`, because shared default project names once made
+# `up` in one repo replace another repo's running postgres container.
+name: zap-eve-copilot
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: zap-eve-postgres
+    ports:
+      - "5438:5432"
+    environment:
+      POSTGRES_USER: zapeve
+      POSTGRES_PASSWORD: zapeve
+      POSTGRES_DB: zap_eve
+    volumes:
+      - zap_eve_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zapeve -d zap_eve"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  zap_eve_pgdata:
