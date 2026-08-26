@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { stripKickoff } from "@/lib/kickoff";
+import { ToolResultChart } from "@/components/charts/tool-result-chart";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import {
   Tool,
@@ -116,25 +117,30 @@ function AgentMessagePart({
       return <AuthorizationPrompt part={part} />;
     case "dynamic-tool":
       return (
-        <Tool
-          defaultOpen={part.state === "approval-requested" || part.state === "approval-responded"}
-        >
-          <ToolHeader
-            state={part.state}
-            title={part.toolName}
-            toolName={part.toolName}
-            type="dynamic-tool"
-          />
-          <ToolContent>
-            <ToolInput input={part.input} />
-            <InputRequestActions
-              canRespond={canRespond}
-              part={part}
-              onInputResponses={onInputResponses}
+        <div className="flex flex-col gap-2">
+          <Tool
+            defaultOpen={part.state === "approval-requested" || part.state === "approval-responded"}
+          >
+            <ToolHeader
+              state={part.state}
+              title={part.toolName}
+              toolName={part.toolName}
+              type="dynamic-tool"
             />
-            <ToolOutput errorText={part.errorText} output={part.output} />
-          </ToolContent>
-        </Tool>
+            <ToolContent>
+              <ToolInput input={part.input} />
+              <InputRequestActions
+                canRespond={canRespond}
+                part={part}
+                onInputResponses={onInputResponses}
+              />
+              <ToolOutput errorText={part.errorText} output={part.output} />
+            </ToolContent>
+          </Tool>
+          {part.state === "output-available" ? (
+            <ToolResultChart output={part.output} toolName={part.toolName} />
+          ) : null}
+        </div>
       );
   }
 }

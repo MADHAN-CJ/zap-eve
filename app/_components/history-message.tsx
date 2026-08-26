@@ -2,6 +2,7 @@
 
 import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message';
 import { stripKickoff } from '@/lib/kickoff';
+import { ToolResultChart } from '@/components/charts/tool-result-chart';
 import {
   Tool,
   ToolContent,
@@ -71,18 +72,23 @@ export function HistoryMessage({ message }: { readonly message: ApiMessage }) {
       <Message from="assistant">
         <MessageContent>
           {tools.map((tool) => (
-            <Tool key={tool.toolCallId}>
-              <ToolHeader
-                state={tool.errorText ? 'output-error' : tool.output !== undefined ? 'output-available' : 'input-available'}
-                title={tool.toolName}
-                toolName={tool.toolName}
-                type="dynamic-tool"
-              />
-              <ToolContent>
-                <ToolInput input={tool.input} />
-                <ToolOutput errorText={tool.errorText} output={tool.output} />
-              </ToolContent>
-            </Tool>
+            <div className="flex flex-col gap-2" key={tool.toolCallId}>
+              <Tool>
+                <ToolHeader
+                  state={tool.errorText ? 'output-error' : tool.output !== undefined ? 'output-available' : 'input-available'}
+                  title={tool.toolName}
+                  toolName={tool.toolName}
+                  type="dynamic-tool"
+                />
+                <ToolContent>
+                  <ToolInput input={tool.input} />
+                  <ToolOutput errorText={tool.errorText} output={tool.output} />
+                </ToolContent>
+              </Tool>
+              {tool.output !== undefined && !tool.errorText ? (
+                <ToolResultChart output={tool.output} toolName={tool.toolName} />
+              ) : null}
+            </div>
           ))}
           {message.content ? <MessageResponse>{message.content}</MessageResponse> : null}
         </MessageContent>
