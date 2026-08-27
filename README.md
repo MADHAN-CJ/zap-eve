@@ -5,10 +5,11 @@
 **A read-only AI analyst for your live Dhan positions.**
 
 Tap a position → talk to an agent that can see your P&L, candles, option chains,
-funds, orders, and trades — and that *structurally cannot* place, modify, or
-cancel a trade.
+funds, orders, and trades — that *structurally cannot* place, modify, or cancel
+a trade, and that **works the numbers in bash and Python instead of guessing
+them**.
 
-`Next.js 16` · `React 19` · `eve durable agents` · `claude-sonnet-5` · `Postgres + Drizzle` · `TypeScript 6`
+`Next.js 16` · `React 19` · `eve durable agents` · `claude-sonnet-5` · `sandboxed bash + Python` · `Postgres + Drizzle` · `TypeScript 6`
 
 </div>
 
@@ -25,6 +26,71 @@ that authenticates the user, enforces thread ownership, and injects the
 server-held continuation token. Broker credentials are AES-256-GCM at rest and
 resolve **inside the tool executor**, keyed by session id — so no secret ever
 enters the model context, not even once.
+
+And when there's real analysis to do, the agent stops behaving like a chatbot
+and starts behaving like a quant: it pulls the series into a **sandbox and
+writes code against it**. That is the difference between an answer and a
+guess — and it's the next section.
+
+---
+
+## The agent uses bash and Python the way a quant uses a notebook
+
+This is the part worth stealing.
+
+A quant analyst handed 300 days of OHLC does not squint at a chart and announce
+a maximum drawdown. They pull the series into a notebook, write a few lines
+against it, and read the number off the output. The estimate-by-eye version
+isn't just less rigorous — it's *confidently wrong in a way nobody catches*,
+because a plausible number looks exactly like a correct one.
+
+Language models fail in precisely that shape. Ask one to scan hundreds of bars
+and report a drawdown, an ATR, or a P&L across an option chain, and it will
+produce something fluent, specific, and fabricated. The fix is not a better
+prompt. **The fix is to stop asking the model to be the calculator.**
+
+So Zap's analyst gets a notebook: eve's **sandbox — bash, Python, a filesystem**.
+Fetch the data with a read tool, write it to a file, compute over it with code,
+and let the *program* produce the figure the model then explains.
+
+```mermaid
+flowchart LR
+    Q["“What's my worst<br/>drawdown this quarter?”"] --> F["get_daily_candles<br/>300 OHLC bars"]
+    F --> W["write to a file<br/><i>not into the context window</i>"]
+    W --> C["bash + Python<br/>peak-to-trough scan"]
+    C --> R["−8,412 · −11.4%<br/>2026-05-14 → 2026-06-02"]
+    R --> A["the model explains<br/>a number it did not invent"]
+```
+
+The instructions (`agent/instructions.md`) put it as policy: use the sandbox
+*“when real computation earns its keep — e.g. crunching hundreds of candles
+into levels, drawdowns, or P&L scenarios — write intermediate data to files and
+return only the conclusions.”* And, pointedly, the other half of the rule:
+**don't use it for arithmetic you can do inline.** A notebook is for the work
+that's too big to hold in your head — which is exactly the work models are
+worst at faking.
+
+### What this buys
+
+| | eyeballed by the model | computed in the sandbox |
+|---|---|---|
+| A drawdown over 300 bars | plausible, unverifiable, often wrong | executed by a program, reproducible |
+| Context cost | all 300 bars occupy the window | bars live in a file; only the result returns |
+| “Show your work” | a narrative of reasoning | code that ran, and its output |
+| Failure mode | silent, fluent fabrication | a stack trace the agent can read and fix |
+
+The third row is the one that matters for trust. When the analyst says a
+position is 11.4% below its peak, that figure traces to a process that
+executed — not to a token the model found likely. And when the code is wrong,
+it *fails*, visibly, instead of returning a beautiful lie.
+
+### Where the boundary sits
+
+The sandbox is **compute over data already fetched**. It has no credentials, no
+network path to the broker, and no way to reach the user's account — that stays
+reachable only through the eleven read-only specs and their server-resolved
+credentials described below. Read tools bring data in; the sandbox does math on
+it; nothing in either path can place a trade.
 
 ---
 
@@ -180,39 +246,9 @@ Derivative positions resolve their underlying automatically
 (`agent/lib/dhan/underlying.ts`), so a NIFTY option chat can pull the index's
 candles and option chain, not just the contract's.
 
-### The sandbox — why the numbers are computed, not guessed
-
-Alongside the domain reads, the agent keeps eve's **sandbox (bash + files)**.
-This is the deliberate answer to the failure mode that makes most "AI analyst"
-demos untrustworthy: an LLM asked to eyeball 300 candles and report a max
-drawdown will produce a confident, plausible, *wrong* number.
-
-So the analyst doesn't eyeball. `agent/instructions.md` directs it to reach for
-real computation whenever computation earns its keep — levels, drawdowns,
-rolling stats, P&L scenarios across an option chain — writing intermediate data
-to files and returning only the conclusions:
-
-```
-get_daily_candles → 300 OHLC bars
-      ↓ written to a file, not held in the context window
-bash + python in the sandbox → swing highs/lows, ATR, max drawdown
-      ↓
-"₹412 below entry (−3.0%); worst peak-to-trough in the window was −11.4%"
-```
-
-Three things fall out of that:
-
-- **Arithmetic is executed, not predicted.** A number in the answer traces to a
-  process that ran, not to a token the model found likely.
-- **The context window stays cheap.** Hundreds of bars live in a file; only the
-  derived conclusion re-enters the prompt.
-- **It stays read-only.** The sandbox is compute over data already fetched — it
-  has no route to the user's broker account, which remains reachable only
-  through the eleven read specs and their server-resolved credentials.
-
-The instructions also draw the line in the other direction: don't shell out for
-arithmetic you can do inline. The sandbox is for work that's genuinely too big
-to do in your head — which is exactly the work models are worst at faking.
+These eleven are how data gets *in*. What happens to it next is the notebook
+loop above — the reads feed the sandbox, and the sandbox is where the analysis
+actually happens.
 
 ---
 
@@ -263,7 +299,7 @@ agent/                     the eve runtime
   hooks/persist.ts         stream → Postgres projection (observe-only)
   hooks/usage.ts           per-step token accounting → NDJSON
   tools/*.ts               11 read-only tools + 4 explicit disableTool()s
-                           (eve's bash/files sandbox stays on — see below)
+                           (the bash/Python sandbox stays ON — deliberately)
   lib/dhan/                client · specs · per-session context · underlying
   lib/db/                  drizzle schema · crypto · mirror · pricing
 
@@ -295,7 +331,7 @@ docs/plan-v1-zap-eve.md    decisions, phases, verification status
 | Agent runtime | `EVE_PROXY_SECRET`, compared with `timingSafeEqual` |
 | Model context | Receives position *identity* and tool results only — never a credential |
 | Write access | None. There is no order-placing code path in the repo. |
-| Sandbox | Compute-only, over data already fetched — no route to the broker account |
+| Sandbox | Compute-only: no credentials, no broker network path, no write route |
 
 Rotating `CREDS_ENCRYPTION_KEY` invalidates every stored broker credential —
 pin it per environment.
