@@ -48,8 +48,10 @@ flowchart TB
     subgraph runtime["Vercel project #2 — eve runtime"]
         AGENT["defineAgent<br/>claude-sonnet-5 · 1M ctx"]
         TOOLS["11 read-only Dhan tools"]
+        BOX["sandbox — bash + files<br/>computation over fetched data"]
         HOOKS["hooks: persist · usage"]
         AGENT --> TOOLS
+        AGENT --> BOX
         AGENT --> HOOKS
     end
 
@@ -167,16 +169,50 @@ Eleven read-only specs in `agent/lib/dhan/specs.ts`, one thin file each in
 `get_option_chain` · `get_intraday_candles` · `get_daily_candles`
 
 There is **no write tool and no approval gate** — not because approvals were
-skipped, but because no write path exists to gate. eve's stock
-`web_search`, `web_fetch`, `todo`, and `load_skill` are explicitly
-`disableTool()`'d, so the surface is exactly eleven domain reads. At eleven
-eager tools, deferred tool-loading would cost more context than it saves —
-`agent/hooks/usage.ts` logs per-step provider usage to NDJSON to keep that
-call honest with data instead of vibes.
+skipped, but because no write path exists to gate. eve's stock `web_search`,
+`web_fetch`, `todo`, and `load_skill` are explicitly `disableTool()`'d, so the
+domain surface is exactly eleven reads. At eleven eager tools, deferred
+tool-loading would cost more context than it saves — `agent/hooks/usage.ts`
+logs per-step provider usage to NDJSON to keep that call honest with data
+instead of vibes.
 
 Derivative positions resolve their underlying automatically
 (`agent/lib/dhan/underlying.ts`), so a NIFTY option chat can pull the index's
 candles and option chain, not just the contract's.
+
+### The sandbox — why the numbers are computed, not guessed
+
+Alongside the domain reads, the agent keeps eve's **sandbox (bash + files)**.
+This is the deliberate answer to the failure mode that makes most "AI analyst"
+demos untrustworthy: an LLM asked to eyeball 300 candles and report a max
+drawdown will produce a confident, plausible, *wrong* number.
+
+So the analyst doesn't eyeball. `agent/instructions.md` directs it to reach for
+real computation whenever computation earns its keep — levels, drawdowns,
+rolling stats, P&L scenarios across an option chain — writing intermediate data
+to files and returning only the conclusions:
+
+```
+get_daily_candles → 300 OHLC bars
+      ↓ written to a file, not held in the context window
+bash + python in the sandbox → swing highs/lows, ATR, max drawdown
+      ↓
+"₹412 below entry (−3.0%); worst peak-to-trough in the window was −11.4%"
+```
+
+Three things fall out of that:
+
+- **Arithmetic is executed, not predicted.** A number in the answer traces to a
+  process that ran, not to a token the model found likely.
+- **The context window stays cheap.** Hundreds of bars live in a file; only the
+  derived conclusion re-enters the prompt.
+- **It stays read-only.** The sandbox is compute over data already fetched — it
+  has no route to the user's broker account, which remains reachable only
+  through the eleven read specs and their server-resolved credentials.
+
+The instructions also draw the line in the other direction: don't shell out for
+arithmetic you can do inline. The sandbox is for work that's genuinely too big
+to do in your head — which is exactly the work models are worst at faking.
 
 ---
 
@@ -227,6 +263,7 @@ agent/                     the eve runtime
   hooks/persist.ts         stream → Postgres projection (observe-only)
   hooks/usage.ts           per-step token accounting → NDJSON
   tools/*.ts               11 read-only tools + 4 explicit disableTool()s
+                           (eve's bash/files sandbox stays on — see below)
   lib/dhan/                client · specs · per-session context · underlying
   lib/db/                  drizzle schema · crypto · mirror · pricing
 
@@ -258,6 +295,7 @@ docs/plan-v1-zap-eve.md    decisions, phases, verification status
 | Agent runtime | `EVE_PROXY_SECRET`, compared with `timingSafeEqual` |
 | Model context | Receives position *identity* and tool results only — never a credential |
 | Write access | None. There is no order-placing code path in the repo. |
+| Sandbox | Compute-only, over data already fetched — no route to the broker account |
 
 Rotating `CREDS_ENCRYPTION_KEY` invalidates every stored broker credential —
 pin it per environment.
