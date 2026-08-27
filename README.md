@@ -4,377 +4,235 @@
 
 **A read-only AI analyst for your live Dhan positions.**
 
-Tap a position → talk to an agent that can see your P&L, candles, option chains,
-funds, orders, and trades — that *structurally cannot* place, modify, or cancel
-a trade, and that **works the numbers in bash and Python instead of guessing
-them**.
+Tap a position, ask about it. The agent reads your P&L, candles, option chains,
+funds and orders — computes the numbers in bash and Python rather than guessing
+them, and *structurally cannot* place, modify, or cancel a trade.
 
-`Next.js 16` · `React 19` · `eve durable agents` · `claude-sonnet-5` · `sandboxed bash + Python` · `Postgres + Drizzle` · `TypeScript 6`
+`Next.js 16` · `React 19` · `eve` · `claude-sonnet-5` · `sandboxed bash + Python` · `Postgres + Drizzle`
 
 </div>
 
 ---
 
-## The one-paragraph version
+## Shape of the system
 
-Zap is a two-deployment, one-repo system. A **Next.js app** owns identity,
-broker credentials, and conversation ownership. A separate **eve runtime**
-owns the agent loop — a durable, resumable workflow that streams tokens and
-tool calls. The browser never talks to the agent runtime and never holds a
-broker credential: every model call is proxied through an app-owned route
-that authenticates the user, enforces thread ownership, and injects the
-server-held continuation token. Broker credentials are AES-256-GCM at rest and
-resolve **inside the tool executor**, keyed by session id — so no secret ever
-enters the model context, not even once.
-
-And when there's real analysis to do, the agent stops behaving like a chatbot
-and starts behaving like a quant: it pulls the series into a **sandbox and
-writes code against it**. That is the difference between an answer and a
-guess — and it's the next section.
-
----
-
-## The agent uses bash and Python the way a quant uses a notebook
-
-This is the part worth stealing.
-
-A quant analyst handed 300 days of OHLC does not squint at a chart and announce
-a maximum drawdown. They pull the series into a notebook, write a few lines
-against it, and read the number off the output. The estimate-by-eye version
-isn't just less rigorous — it's *confidently wrong in a way nobody catches*,
-because a plausible number looks exactly like a correct one.
-
-Language models fail in precisely that shape. Ask one to scan hundreds of bars
-and report a drawdown, an ATR, or a P&L across an option chain, and it will
-produce something fluent, specific, and fabricated. The fix is not a better
-prompt. **The fix is to stop asking the model to be the calculator.**
-
-So Zap's analyst gets a notebook: eve's **sandbox — bash, Python, a filesystem**.
-Fetch the data with a read tool, write it to a file, compute over it with code,
-and let the *program* produce the figure the model then explains.
-
-```mermaid
-flowchart LR
-    Q["“What's my worst<br/>drawdown this quarter?”"] --> F["get_daily_candles<br/>300 OHLC bars"]
-    F --> W["write to a file<br/><i>not into the context window</i>"]
-    W --> C["bash + Python<br/>peak-to-trough scan"]
-    C --> R["−8,412 · −11.4%<br/>2026-05-14 → 2026-06-02"]
-    R --> A["the model explains<br/>a number it did not invent"]
-```
-
-The instructions (`agent/instructions.md`) put it as policy: use the sandbox
-*“when real computation earns its keep — e.g. crunching hundreds of candles
-into levels, drawdowns, or P&L scenarios — write intermediate data to files and
-return only the conclusions.”* And, pointedly, the other half of the rule:
-**don't use it for arithmetic you can do inline.** A notebook is for the work
-that's too big to hold in your head — which is exactly the work models are
-worst at faking.
-
-### What this buys
-
-| | eyeballed by the model | computed in the sandbox |
-|---|---|---|
-| A drawdown over 300 bars | plausible, unverifiable, often wrong | executed by a program, reproducible |
-| Context cost | all 300 bars occupy the window | bars live in a file; only the result returns |
-| “Show your work” | a narrative of reasoning | code that ran, and its output |
-| Failure mode | silent, fluent fabrication | a stack trace the agent can read and fix |
-
-The third row is the one that matters for trust. When the analyst says a
-position is 11.4% below its peak, that figure traces to a process that
-executed — not to a token the model found likely. And when the code is wrong,
-it *fails*, visibly, instead of returning a beautiful lie.
-
-### Where the boundary sits
-
-The sandbox is **compute over data already fetched**. It has no credentials, no
-network path to the broker, and no way to reach the user's account — that stays
-reachable only through the eleven read-only specs and their server-resolved
-credentials described below. Read tools bring data in; the sandbox does math on
-it; nothing in either path can place a trade.
-
----
-
-## Architecture
+One repo, two deployments. A **Next.js app** owns identity, broker credentials,
+and thread ownership. A separate **eve runtime** owns the agent loop — durable,
+resumable, streaming. The browser never reaches the runtime and never holds a
+broker credential.
 
 ```mermaid
 flowchart TB
-    subgraph browser["Browser — Next.js 16 / React 19"]
-        UI["Workspace shell<br/>positions · chat · history"]
+    subgraph browser["Browser"]
+        UI["Workspace · positions · chat"]
         HOOK["useEveAgent({ host: '/api' })"]
         UI --> HOOK
     end
 
-    subgraph web["Vercel project #1 — web (Next)"]
-        AUTH["/api/auth/*<br/>email OTP → 7d JWT"]
-        BROKER["/api/broker/*<br/>connect · positions · holdings"]
-        THREADS["/api/threads/*<br/>list · load · soft-delete"]
-        PROXY["/api/eve/v1/[...path]<br/><b>the trust boundary</b>"]
+    subgraph web["Vercel #1 — web (next build)"]
+        REST["/api/auth · /api/broker · /api/threads"]
+        PROXY["/api/eve/v1/[...path]<br/><b>trust boundary</b>"]
     end
 
-    subgraph runtime["Vercel project #2 — eve runtime"]
-        AGENT["defineAgent<br/>claude-sonnet-5 · 1M ctx"]
+    subgraph runtime["Vercel #2 — runtime (eve build)"]
+        AGENT["defineAgent · claude-sonnet-5 · 1M ctx"]
         TOOLS["11 read-only Dhan tools"]
-        BOX["sandbox — bash + files<br/>computation over fetched data"]
+        BOX["sandbox — bash · Python · files"]
         HOOKS["hooks: persist · usage"]
-        AGENT --> TOOLS
-        AGENT --> BOX
-        AGENT --> HOOKS
+        AGENT --> TOOLS & BOX & HOOKS
     end
 
-    DB[("Postgres — Drizzle<br/>users · otps · broker_connections<br/>session_context · threads · messages")]
-    DHAN["Dhan HQ API"]
-    ANTHROPIC["Anthropic API"]
+    DB[("Postgres · Drizzle")]
+    DHAN["Dhan API"]
 
     HOOK -->|"Bearer JWT"| PROXY
-    UI --> AUTH & BROKER & THREADS
+    UI --> REST
     PROXY -->|"x-eve-proxy-secret"| AGENT
-    AGENT --> ANTHROPIC
     TOOLS -->|"creds resolved server-side"| DHAN
-    AUTH & BROKER & THREADS & PROXY --> DB
-    TOOLS -.->|"session_context lookup"| DB
-    HOOKS -.->|"stream projection"| DB
+    REST & PROXY --> DB
+    TOOLS & HOOKS -.-> DB
 ```
 
-### Why two deployments
-
-The agent runtime is a long-lived streaming process with a different build
-(`eve build`) and a different failure surface than a Next app. Splitting them
-means the web tier can redeploy without dropping in-flight agent sessions, and
-the runtime is reachable *only* by a party holding `EVE_PROXY_SECRET`.
-
-| | build | entry | authenticates |
-|---|---|---|---|
-| `zap-eve-agent` (web) | `next build` | `app/` | user JWT (HS256, 7d) |
-| `zap-eve-agent-runtime` | `eve build` | `agent/` | proxy secret → Vercel OIDC → localhost |
-
-Auth on the runtime channel is an ordered chain (`agent/channels/eve.ts`):
-constant-time proxy-secret compare, then `vercelOidc()` for the eve TUI, then
-`localDev()` for `eve dev`. A browser presenting none of these is rejected.
+Splitting the tiers lets the web app redeploy without dropping in-flight agent
+sessions, and leaves the runtime reachable only by a holder of
+`EVE_PROXY_SECRET`. Its auth is an ordered chain (`agent/channels/eve.ts`):
+constant-time secret compare → `vercelOidc()` for the eve TUI → `localDev()`.
 
 ---
 
-## The proxy is the product
+## It opens a notebook instead of eyeballing the chart
 
-`app/api/eve/v1/[...path]/route.ts` is the most load-bearing file in the repo.
-It exposes exactly three upstream routes and 404s everything else.
+Ask a model to scan 300 OHLC bars for a max drawdown and it returns something
+fluent, specific, and fabricated — a plausible number is indistinguishable from
+a correct one. The fix isn't a better prompt; it's to stop asking the model to
+be the calculator.
+
+So the agent gets a sandbox: **bash, Python, a filesystem**. Read tools fetch,
+code computes, the model explains.
+
+```mermaid
+flowchart LR
+    F["get_daily_candles<br/>300 bars"] --> W["→ file<br/><i>not the context window</i>"]
+    W --> C["bash + Python<br/>peak-to-trough scan"]
+    C --> R["−11.4%<br/>2026-05-14 → 06-02"]
+```
+
+Three consequences: figures trace to a process that ran, not a likely token;
+bars live in a file so the context stays cheap; wrong code *fails visibly*
+instead of returning a beautiful lie. `agent/instructions.md` also draws the
+line — no shelling out for arithmetic doable inline.
+
+The sandbox computes over data already fetched. No credentials, no broker
+network path, no write route.
+
+---
+
+## The proxy
+
+`app/api/eve/v1/[...path]/route.ts` exposes three upstream routes and 404s the
+rest.
 
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant P as /api/eve/v1 proxy
+    participant P as proxy
     participant D as Postgres
-    participant E as eve runtime
-    participant K as Dhan
+    participant E as runtime
 
     B->>P: POST session { message, position } + JWT
-    P->>P: requireUser() → 401 means "log in again", never Dhan
-    P->>D: findThreadByPosition → 409 CHAT_EXISTS if live
+    P->>D: findThreadByPosition → 409 if one is live
     P->>E: POST session { kickoff + message }  (position stripped)
     E-->>P: { sessionId, continuationToken }
-    P->>D: upsert session_context(sessionId → userId, position)
-    P->>D: insert thread (owned from instant zero)
-    P-->>B: { sessionId, continuationToken }
-
+    P->>D: session_context + owned thread row
     B->>P: GET session/<id>/stream
     P->>D: ownedThread() → 403 / 404
     P-->>B: NDJSON pass-through
-
-    E->>K: tool call
-    K-->>E: live data
-    E-->>D: persist hook mirrors the stream
 ```
 
-Five invariants it enforces:
-
-1. **Zap 401 ≠ Dhan problem.** A 401 always and only means "log in again."
-   An expired Dhan token is *broker status*, surfaced as a reconnect banner.
-2. **Ownership on every session-scoped call** — 403 for a foreign thread,
-   404 for an unknown one.
-3. **Position never reaches the model as a parameter.** It's stripped from the
-   body, written to `session_context`, and re-stated as a kickoff prose block.
-4. **The server owns the continuation token.** Client-supplied tokens are
-   discarded — eve routes by *token*, not URL, so a stale one would silently
-   fork a new session instead of erroring. A mismatched `sessionId` in the
-   response is treated as a fork and fails loudly with a 409.
-5. **One live thread per position**, enforced both in the proxy and by a
-   partial unique index in Postgres.
+1. **A Zap 401 only ever means "log in again."** An expired Dhan token is
+   broker status, surfaced as a reconnect banner.
+2. **Ownership checked on every session-scoped call.**
+3. **Position never reaches the model as a parameter** — stripped, stored in
+   `session_context`, restated as a kickoff prose block.
+4. **The server owns the continuation token.** eve routes by token, not URL, so
+   a stale client token would silently fork a session; a mismatched `sessionId`
+   in the reply is treated as a fork and 409s.
+5. **One live thread per position** — enforced in the proxy *and* by a partial
+   unique index.
 
 ---
 
-## How a tool gets credentials
-
-This is the security core. The model never sees, passes, or names a credential.
+## Credentials never enter the model context
 
 ```mermaid
 flowchart LR
-    T["tool.execute(input, ctx)"] --> S["ctx.session.id"]
+    T["tool.execute(ctx)"] --> S["ctx.session.id"]
     S --> SC["session_context<br/>→ userId + position"]
-    SC --> BC["broker_connections<br/>status = active"]
-    BC --> DEC["AES-256-GCM decrypt<br/>CREDS_ENCRYPTION_KEY"]
+    SC --> BC["broker_connections"]
+    BC --> DEC["AES-256-GCM decrypt"]
     DEC --> CALL["dhan.call(creds, …)"]
-    SC -.->|"miss / error"| FAIL["fail closed → { error: … }"]
-    BC -.->|"expired / disconnected"| FAIL
+    SC -.->|"any failure"| FAIL["fail closed → { error }"]
+    BC -.-> FAIL
 ```
 
-`agent/lib/dhan/context.ts` **fails closed**: any lookup or decrypt failure
-resolves to `null` rather than degrading to the env-var bench account. Tool
-`execute` never throws — every failure returns an `{ error }` envelope the
-model can reason about and relay in plain language.
+`agent/lib/dhan/context.ts` fails closed — a lookup or decrypt failure resolves
+to `null` rather than degrading to the env bench account. `execute` never
+throws; failures return `{ error }` envelopes the model can relay.
 
-Expired-token detection is deliberately paranoid: Dhan's Data API returns 401s
-on *live* tokens (error 806), so a 401 only marks the connection
-`token_expired` after a cheap `getFundLimit` probe also fails.
+Expiry detection is deliberately paranoid: Dhan's Data API returns 401s on live
+tokens (error 806), so a 401 marks the connection `token_expired` only after a
+cheap `getFundLimit` probe also fails.
 
-### The toolset
+### Tools
 
-Eleven read-only specs in `agent/lib/dhan/specs.ts`, one thin file each in
-`agent/tools/` (eve derives tool names from filenames):
+Eleven read-only specs (`agent/lib/dhan/specs.ts`), one file each in
+`agent/tools/` — eve derives names from filenames:
 
 `get_position_snapshot` · `get_positions` · `get_holdings` · `get_funds` ·
 `get_order_book` · `get_trade_book` · `get_ltp` · `get_expiry_list` ·
 `get_option_chain` · `get_intraday_candles` · `get_daily_candles`
 
-There is **no write tool and no approval gate** — not because approvals were
-skipped, but because no write path exists to gate. eve's stock `web_search`,
-`web_fetch`, `todo`, and `load_skill` are explicitly `disableTool()`'d, so the
-domain surface is exactly eleven reads. At eleven eager tools, deferred
-tool-loading would cost more context than it saves — `agent/hooks/usage.ts`
-logs per-step provider usage to NDJSON to keep that call honest with data
-instead of vibes.
-
-Derivative positions resolve their underlying automatically
-(`agent/lib/dhan/underlying.ts`), so a NIFTY option chat can pull the index's
-candles and option chain, not just the contract's.
-
-These eleven are how data gets *in*. What happens to it next is the notebook
-loop above — the reads feed the sandbox, and the sandbox is where the analysis
-actually happens.
+No write tool, no approval gate — there's no write path to gate. eve's stock
+`web_search`, `web_fetch`, `todo`, and `load_skill` are `disableTool()`'d. At
+eleven eager tools, deferred loading would cost more context than it saves;
+`agent/hooks/usage.ts` logs per-step usage to NDJSON to keep that honest.
+Derivative positions resolve their underlying automatically, so a NIFTY option
+chat can pull the index's chain and candles.
 
 ---
 
-## Persistence: two systems of record, on purpose
+## Persistence: two systems of record
 
-```mermaid
-flowchart LR
-    E["eve workflow store"] -->|"system of record for<br/><b>CONTINUING</b> a session"| E2["resume · continuation tokens"]
-    S["session stream"] -->|"hooks/persist.ts"| PG[("threads · messages")]
-    PG -->|"system of record for<br/><b>DISPLAYING</b> a session"| UI["history · sidebar · charts"]
-```
+eve's workflow store is authoritative for **continuing** a session. Postgres is
+authoritative for **displaying** one: `agent/hooks/persist.ts` projects the
+event stream into `threads`/`messages`. It's observe-only and runs after each
+event is durably recorded, so history can lag but never blocks or corrupts a
+turn — every handler swallows its own errors.
 
-`agent/hooks/persist.ts` projects the event stream into Postgres. It is
-**observe-only and runs after each event is durably recorded**, so persistence
-can lag but can never corrupt or block a turn. Every handler swallows its own
-errors — a down database degrades history, not the agent.
+- **Turn assembly** — user rows insert once; the assistant row upserts per turn
+  (`messages_assistant_turn_uidx`, partial unique on `role = 'assistant'`), so a
+  crash loses at most one unflushed fragment.
+- **Token de-doubling** — hook context yields `eve:eve:<uuid>` where the API
+  wants `eve:<uuid>`. The doubled form doesn't error, it silently forks.
+- **Owner backfill** — the hook may create a thread before the proxy writes
+  `session_context`; ownerless rows are never listed.
+- **Cost** — usage priced server-side into a `cost` JSONB per message.
+- **Resume cursor** — every event bumps `threads.stream_index`.
 
-Details worth stealing:
-
-- **Turn assembly.** User rows insert once on `message.received`; the assistant
-  row is *upserted* per turn (`messages_assistant_turn_uidx`, a partial unique
-  index on `role = 'assistant'`) as fragments stream in — a crash loses at most
-  one unflushed fragment.
-- **Token de-doubling.** The hook context namespaces continuation tokens as
-  `eve:eve:<uuid>` while the HTTP API expects `eve:<uuid>`. Sending the doubled
-  form doesn't error — it silently forks a new session. So a repeated leading
-  segment is stripped before storage.
-- **Owner backfill.** The hook may create a thread before the proxy has written
-  `session_context`; ownerless rows are never listed and get backfilled.
-- **Cost.** `usage` is priced server-side against a price table into a `cost`
-  JSONB column per message.
-- **Resume cursor.** Every stream event bumps `threads.stream_index`, which
-  `useEveAgent` uses to reattach mid-turn.
-
-Chat history reloads render from the same JSON the live stream produced, which
-is why `components/charts/tool-result-chart.tsx` can draw candlesticks and
-option-chain OI charts identically in both paths.
+History renders from the same JSON the live stream produced, so
+`components/charts/` draws candles and option-chain OI identically in both.
 
 ---
 
-## Repository map
+## Map
 
 ```
-agent/                     the eve runtime
-  agent.ts                 defineAgent — claude-sonnet-5, 1M context window
-  instructions.md          identity · tool policy · style · stated limitations
-  channels/eve.ts          proxy-secret → OIDC → localDev auth chain
-  hooks/persist.ts         stream → Postgres projection (observe-only)
-  hooks/usage.ts           per-step token accounting → NDJSON
-  tools/*.ts               11 read-only tools + 4 explicit disableTool()s
-                           (the bash/Python sandbox stays ON — deliberately)
-  lib/dhan/                client · specs · per-session context · underlying
-  lib/db/                  drizzle schema · crypto · mirror · pricing
-
-app/                       Next.js 16 App Router
-  api/eve/v1/[...path]/    the proxy — auth, ownership, tokens, kickoff
-  api/auth · broker · threads
-  _components/             workspace shell, positions, chat, broker modal
-
-components/
-  ai-elements/             streaming message, reasoning, tool cards
-  charts/                  lightweight-charts candles + option-chain OI
-  ui/                      radix + tailwind v4 primitives
-
-lib/                       client SDK + server auth/otp/threads helpers
-drizzle/                   generated migrations
-scripts/                   deploy-runtime.sh · deploy-web.sh · db-smoke.ts
-docs/plan-v1-zap-eve.md    decisions, phases, verification status
+agent/            agent.ts · instructions.md · channels/ · hooks/
+  tools/          11 read-only tools + 4 disableTool()s (sandbox stays on)
+  lib/dhan/       client · specs · per-session context · underlying
+  lib/db/         drizzle schema · crypto · mirror · pricing
+app/              App Router — api/eve/v1 proxy, auth, broker, threads
+components/       ai-elements (streaming) · charts · radix + tailwind v4
+lib/              client SDK, server auth/otp/threads
+drizzle/          migrations          scripts/  deploy + db smoke
+docs/plan-v1-zap-eve.md               decisions, phases, verification
 ```
-
----
-
-## Security model at a glance
 
 | Asset | Protection |
 |---|---|
-| Dhan access token | AES-256-GCM (`CREDS_ENCRYPTION_KEY`), decrypted only in the tool executor and broker routes |
-| Login codes | HMAC-SHA256 of `code:email` with `CREDS_HASH_PEPPER` — raw codes never stored |
-| Session | HS256 JWT, 7 days, `AUTH_JWT_SECRET`; the only thing the browser holds |
-| Agent runtime | `EVE_PROXY_SECRET`, compared with `timingSafeEqual` |
-| Model context | Receives position *identity* and tool results only — never a credential |
-| Write access | None. There is no order-placing code path in the repo. |
-| Sandbox | Compute-only: no credentials, no broker network path, no write route |
+| Dhan token | AES-256-GCM, decrypted only in the tool executor and broker routes |
+| Login codes | HMAC-SHA256 of `code:email` — raw codes never stored |
+| Session | HS256 JWT, 7d; the only thing the browser holds |
+| Runtime | `EVE_PROXY_SECRET`, `timingSafeEqual` |
+| Write access | None. No order-placing path exists in the repo. |
 
-Rotating `CREDS_ENCRYPTION_KEY` invalidates every stored broker credential —
-pin it per environment.
+Rotating `CREDS_ENCRYPTION_KEY` invalidates stored broker credentials — pin it
+per environment.
 
 ---
 
-## Run it locally
+## Run it
 
 ```bash
 nvm use 24                    # eve requires Node >= 24
 docker compose up -d          # Postgres on :5438
-cp .env.example .env          # openssl rand -hex 32 for each secret + ANTHROPIC_API_KEY
-npm install
-npm run db:migrate            # drizzle-kit migrate
-npm run dev                   # Next + eve on :3000 (withEve mounts both)
+cp .env.example .env          # openssl rand -hex 32 per secret + ANTHROPIC_API_KEY
+npm install && npm run db:migrate
+npm run dev                   # Next + eve on :3000
 ```
 
-Log in with `test@zaptrade.app` / OTP `123456`, or any email — codes print to
-the server console until `RESEND_API_KEY` is set. Connect Dhan with your client
-ID and a fresh access token (24h life; the app shows a reconnect banner when it
-dies).
+Log in with `test@zaptrade.app` / `123456`, or any email — codes print to the
+console until `RESEND_API_KEY` is set. Connect Dhan with a client ID and fresh
+access token (24h life).
+
+`npm run typecheck` · `npm run db:smoke` · `npm run dev:eve` (runtime alone,
+bench credentials)
 
 ```bash
-npm run typecheck     # tsc --noEmit
-npm run db:smoke      # end-to-end DB sanity
-npm run dev:eve       # runtime alone (bench mode, DHAN_* env credentials)
+./scripts/deploy-runtime.sh   # → zap-eve-agent-runtime
+./scripts/deploy-web.sh       # → zap-eve-agent
 ```
 
-## Deploy
-
-```bash
-./scripts/deploy-runtime.sh   # → zap-eve-agent-runtime  (eve build)
-./scripts/deploy-web.sh       # → zap-eve-agent          (next build)
-```
-
-The runtime needs `ANTHROPIC_API_KEY`, `DATABASE_URL`, `CREDS_*`, and
-`EVE_PROXY_SECRET`. The web project needs the same set plus
-`EVE_UPSTREAM_ORIGIN` pointing at the runtime deployment. Locally that variable
-is unset and `withEve` serves the runtime on the same origin — the proxy code
-path is identical either way.
-
----
-
-<div align="center">
-<sub>Design decisions, phase log, and verification status live in <code>docs/plan-v1-zap-eve.md</code>.</sub>
-</div>
+Both need `ANTHROPIC_API_KEY`, `DATABASE_URL`, `CREDS_*`, `EVE_PROXY_SECRET`;
+web additionally needs `EVE_UPSTREAM_ORIGIN`. Unset locally, `withEve` serves
+the runtime on the same origin — the proxy path is identical either way.
