@@ -78,7 +78,7 @@ export const threads = pgTable(
      * Rows with a null owner are never listed.
      */
     userId: uuid('user_id'),
-    /** Position identity — one live thread per (user, position). */
+    /** Position identity — every thread belongs to one position. */
     securityId: text('security_id'),
     exchangeSegment: text('exchange_segment'),
     productType: text('product_type'),
@@ -87,7 +87,7 @@ export const threads = pgTable(
     continuationToken: text('continuation_token'),
     /** Resume cursor for useEveAgent (count of mirrored stream events). */
     streamIndex: integer('stream_index').notNull().default(0),
-    /** Symbol (set by the proxy) or first user message truncated to 40 chars. */
+    /** First user message (kickoff stripped, 40 chars) until the user renames it. */
     title: text('title'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -96,10 +96,8 @@ export const threads = pgTable(
   },
   (t) => [
     index('threads_user_idx').on(t.userId),
-    /** One LIVE thread per position per user (deleted rows don't block a new chat). */
-    uniqueIndex('threads_user_position_uidx')
-      .on(t.userId, t.securityId, t.exchangeSegment, t.productType)
-      .where(sql`${t.deletedAt} is null and ${t.userId} is not null and ${t.securityId} is not null`),
+    /** Threads are listed grouped by position; many threads per position. */
+    index('threads_user_position_idx').on(t.userId, t.securityId, t.exchangeSegment, t.productType),
   ],
 );
 

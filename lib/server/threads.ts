@@ -8,8 +8,7 @@ import type { PositionIdentity } from '@/agent/lib/db/session-context';
 /**
  * Server-side thread service. Every entry point takes the authenticated
  * USER ID (from the session JWT — never a client-supplied id) and only ever
- * returns rows that user owns. One live thread per position (schema enforces
- * it); deleted threads don't block starting a fresh chat on the same position.
+ * returns rows that user owns. Any number of threads per position.
  */
 
 export interface ThreadSummary {
@@ -73,21 +72,39 @@ export async function listThreads(userId: string): Promise<ThreadSummary[]> {
   return rows.map(summarize);
 }
 
-/** The live thread for a position, if any — lets the UI resume instead of forking. */
-export async function findThreadByPosition(
+/** All live threads for one position, newest first (the position hub). */
+export async function listThreadsByPosition(
   userId: string,
   position: Pick<PositionIdentity, 'securityId' | 'exchangeSegment' | 'productType'>,
-): Promise<ThreadSummary | null> {
-  const row = await db().query.threads.findFirst({
-    where: and(
-      eq(threads.userId, userId),
-      eq(threads.securityId, position.securityId),
-      eq(threads.exchangeSegment, position.exchangeSegment),
-      eq(threads.productType, position.productType),
-      isNull(threads.deletedAt),
-    ),
-  });
-  return row ? summarize(row) : null;
+): Promise<ThreadSummary[]> {
+  const rows = await db()
+    .select()
+    .from(threads)
+    .where(
+      and(
+        eq(threads.userId, userId),
+        eq(threads.securityId, position.securityId),
+        eq(threads.exchangeSegment, position.exchangeSegment),
+        eq(threads.productType, position.productType),
+        isNull(threads.deletedAt),
+      ),
+    )
+    .orderBy(desc(threads.updatedAt));
+  return rows.map(summarize);
+}
+
+const TITLE_MAX = 80;
+
+export async function renameThread(userId: string, threadId: string, title: string): Promise<ThreadSummary> {
+  await ownedThread(userId, threadId); // throws 404/403
+  const trimmed = title.trim().slice(0, TITLE_MAX);
+  if (!trimmed) throw new HttpError(400, 'Title cannot be empty.');
+  const [row] = await db()
+    .update(threads)
+    .set({ title: trimmed })
+    .where(eq(threads.id, threadId))
+    .returning();
+  return summarize(row);
 }
 
 /** The owned, live thread row or a typed 404/403. */

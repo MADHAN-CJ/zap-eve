@@ -5,7 +5,6 @@ import { db } from '@/agent/lib/db/client';
 import { threads } from '@/agent/lib/db/schema';
 import { upsertSessionContext } from '@/agent/lib/db/session-context';
 import { errorResponse, requireUser, type SessionUser } from '@/lib/server/auth';
-import { findThreadByPosition } from '@/lib/server/threads';
 
 /**
  * App-owned proxy in front of eve's session routes. The browser points
@@ -19,9 +18,7 @@ import { findThreadByPosition } from '@/lib/server/threads';
  *     prepends a position kickoff block to the first message;
  *  4. injects the DB-stored continuation token on follow-ups. Client tokens
  *     are ignored: eve routes by token (a stale/foreign one silently FORKS a
- *     new session), so the server stays the source of truth;
- *  5. keeps one live thread per position — creating a chat for a position
- *     that already has one returns 409 with the existing thread to resume.
+ *     new session), so the server stays the source of truth.
  *
  * Only the three session routes are exposed; everything else 404s.
  */
@@ -95,15 +92,6 @@ export async function POST(req: Request, { params }: Params) {
       }
       const position = parsedPos.data;
 
-      // One live thread per position: resume instead of forking.
-      const existing = await findThreadByPosition(user.userId, position);
-      if (existing) {
-        return NextResponse.json(
-          { error: 'A chat for this position already exists.', code: 'CHAT_EXISTS', thread: existing },
-          { status: 409 },
-        );
-      }
-
       const kickoff =
         `[Position chat] This conversation is about the user's position: ` +
         `${position.symbol} (${position.exchangeSegment}, ${position.productType}, ` +
@@ -131,7 +119,7 @@ export async function POST(req: Request, { params }: Params) {
           eveSessionId: payload.sessionId,
           userId: user.userId,
           ...position,
-          title: position.symbol,
+          // Title is filled by the persist hook from the first user message.
           continuationToken: payload.continuationToken ?? null,
         })
         .onConflictDoNothing({ target: threads.eveSessionId });

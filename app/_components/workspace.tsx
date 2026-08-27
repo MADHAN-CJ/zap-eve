@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { LogOutIcon, PlugZapIcon } from 'lucide-react';
+import { ChevronLeftIcon, LogOutIcon, MessageSquarePlusIcon, PlugZapIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -22,29 +22,33 @@ import {
 import { clearSession, getUser, isLoggedIn } from '@/lib/client/settings';
 import {
   deleteThread as apiDeleteThread,
-  findThreadByPosition,
+  renameThread as apiRenameThread,
   getThread,
   listThreads,
+  positionKey,
   type PositionRef,
   type ThreadDetail,
   type ThreadSummary,
 } from '@/lib/client/threads-api';
 import { BrokerModal } from './broker-modal';
+import { EditableTitle } from './editable-title';
 import { Login } from './login';
+import { PositionHub } from './position-hub';
 import { PositionsList } from './positions-list';
 import { Sidebar } from './sidebar';
 import { ThreadChat } from './thread-chat';
 
 /**
  * The workspace shell: login gate → (broker gate) → sidebar + main pane.
- * Main pane is either the positions list (home) or one position chat — a
- * draft (no eve session yet; first send creates it) or a resumed thread
- * (history + eve session cursor). One live chat per position: tapping a
- * position with an existing chat resumes it.
+ * Main pane is the positions list (home), a position hub (that position's
+ * chats + "New chat"), a draft chat (no eve session yet; first send creates
+ * it), or a resumed thread (history + eve session cursor). Any number of
+ * threads per position.
  */
 
 type View =
   | { kind: 'home' }
+  | { kind: 'hub'; position: PositionRef }
   | { kind: 'draft'; position: PositionRef }
   | { kind: 'thread'; id: string };
 
@@ -134,12 +138,32 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
 
   const removeThread = useCallback(
     async (id: string) => {
+      const gone = threads.find((t) => t.id === id);
       setThreads((prev) => prev.filter((t) => t.id !== id));
-      setView((v) => (v.kind === 'thread' && v.id === id ? { kind: 'home' } : v));
+      setView((v) =>
+        v.kind === 'thread' && v.id === id
+          ? gone?.position
+            ? { kind: 'hub', position: gone.position }
+            : { kind: 'home' }
+          : v,
+      );
       try {
         await apiDeleteThread(id);
       } finally {
         void refreshThreads();
+      }
+    },
+    [threads, refreshThreads],
+  );
+
+  const renameThread = useCallback(
+    async (id: string, title: string) => {
+      setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
+      setDetail((d) => (d && d.id === id ? { ...d, title } : d));
+      try {
+        await apiRenameThread(id, title);
+      } catch {
+        void refreshThreads(); // revert to the server's truth
       }
     },
     [refreshThreads],
@@ -173,47 +197,44 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
   // Draft lifecycle: remembers the eve session its first send created so the
   // sidebar can highlight the adopted row without remounting mid-stream.
   const [draftSessionId, setDraftSessionId] = useState<string | null>(null);
+  const [draftEpoch, setDraftEpoch] = useState(0);
   const adoptedThreadId = draftSessionId
     ? (threads.find((t) => t.eveSessionId === draftSessionId)?.id ?? null)
     : null;
 
-  /** Tap a row: resume its live chat if one exists, else open a draft. */
-  const openChatFor = useCallback(async (position: PositionRef) => {
-    try {
-      const existing = await findThreadByPosition(position);
-      if (existing) {
-        setDraftSessionId(null);
-        setView({ kind: 'thread', id: existing.id });
-        return;
-      }
-    } catch {
-      // fall through to a draft — the proxy's 409 still protects duplicates
-    }
+  /** Tap a row: open that position's hub (its chats + "New chat"). */
+  const openHub = useCallback((position: PositionRef) => {
     setDraftSessionId(null);
+    setView({ kind: 'hub', position });
+  }, []);
+
+  const startNewChat = useCallback((position: PositionRef) => {
+    setDraftSessionId(null);
+    setDraftEpoch((n) => n + 1);
     setView({ kind: 'draft', position });
   }, []);
 
   const openPositionChat = useCallback(
     (p: DhanPosition) =>
-      openChatFor({
+      openHub({
         securityId: String(p.securityId),
         exchangeSegment: String(p.exchangeSegment),
         productType: String(p.productType),
         symbol: String(p.tradingSymbol),
       }),
-    [openChatFor],
+    [openHub],
   );
 
   /** Holdings have no exchangeSegment/productType — map exchange → *_EQ, CNC. */
   const openHoldingChat = useCallback(
     (h: DhanHolding) =>
-      openChatFor({
+      openHub({
         securityId: String(h.securityId),
         exchangeSegment: String(h.exchange).toUpperCase() === 'BSE' ? 'BSE_EQ' : 'NSE_EQ',
         productType: 'CNC',
         symbol: String(h.tradingSymbol),
       }),
-    [openChatFor],
+    [openHub],
   );
 
   const selectThread = useCallback(
@@ -227,6 +248,23 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
   );
 
   const sidebarActiveId = view.kind === 'thread' ? view.id : (adoptedThreadId ?? '');
+  const viewPosition: PositionRef | null =
+    view.kind === 'hub' || view.kind === 'draft'
+      ? view.position
+      : view.kind === 'thread'
+        ? (detail?.position ?? threads.find((t) => t.id === view.id)?.position ?? null)
+        : null;
+  const activePositionKey = viewPosition ? positionKey(viewPosition) : null;
+  const hubThreads = view.kind === 'hub' ? threads.filter((t) => t.position && positionKey(t.position) === activePositionKey) : [];
+  const hubSubtitle = (() => {
+    if (view.kind !== 'hub') return null;
+    const p = positions.find((row) => positionKey({ securityId: String(row.securityId), exchangeSegment: String(row.exchangeSegment), productType: String(row.productType) }) === activePositionKey);
+    if (p) return `qty ${p.netQty} · ${p.positionType}`;
+    const h = holdings.find((row) => String(row.securityId) === view.position.securityId && view.position.productType === 'CNC');
+    if (h) return `holding · qty ${h.totalQty} @ ₹${h.avgCostPrice}`;
+    return null;
+  })();
+  const activeThread = view.kind === 'thread' ? (threads.find((t) => t.id === view.id) ?? null) : null;
 
   const brokerConnected = broker?.status === 'active';
   const brokerExpired = broker?.status === 'token_expired';
@@ -235,6 +273,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
     <main className="flex h-dvh overflow-hidden bg-background text-foreground">
       <Sidebar
         activeId={sidebarActiveId}
+        activePositionKey={activePositionKey}
         homeActive={view.kind === 'home'}
         onDelete={(id) => void removeThread(id)}
         onHome={() => {
@@ -242,7 +281,9 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
           setView({ kind: 'home' });
           if (brokerConnected) void refreshPositions();
         }}
+        onRename={renameThread}
         onSelect={selectThread}
+        onSelectPosition={openHub}
         threads={threads}
       />
 
@@ -314,34 +355,65 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
               </div>
             </div>
           )
-        ) : view.kind === 'draft' ? (
-          <ThreadChat
-            history={[]}
-            key={`draft:${view.position.exchangeSegment}:${view.position.securityId}:${view.position.productType}`}
-            onSessionCreated={(sid) => {
-              setDraftSessionId(sid);
-              void refreshThreads();
-            }}
-            onTurnSettled={() => void refreshThreads()}
+        ) : view.kind === 'hub' ? (
+          <PositionHub
+            onBack={() => setView({ kind: 'home' })}
+            onDelete={(id) => void removeThread(id)}
+            onNewChat={() => startNewChat(view.position)}
+            onOpen={selectThread}
+            onRename={renameThread}
             position={view.position}
-            starters={STARTERS}
+            subtitle={hubSubtitle}
+            threads={hubThreads}
           />
+        ) : view.kind === 'draft' ? (
+          <>
+            <ChatBar
+              onBack={() => openHub(view.position)}
+              onNewChat={null}
+              position={view.position}
+              thread={threads.find((t) => t.id === adoptedThreadId) ?? null}
+              onRename={renameThread}
+            />
+            <ThreadChat
+              history={[]}
+              key={`draft:${view.position.exchangeSegment}:${view.position.securityId}:${view.position.productType}:${draftEpoch}`}
+              onSessionCreated={(sid) => {
+                setDraftSessionId(sid);
+                void refreshThreads();
+              }}
+              onTurnSettled={() => void refreshThreads()}
+              position={view.position}
+              starters={STARTERS}
+            />
+          </>
         ) : detail ? (
-          <ThreadChat
-            history={detail.messages}
-            key={`thread:${detail.id}`}
-            onTurnSettled={() => void refreshThreads()}
-            position={
-              detail.position ?? {
-                securityId: '',
-                exchangeSegment: '',
-                productType: '',
-                symbol: detail.title ?? 'position',
+          <>
+            {detail.position ? (
+              <ChatBar
+                onBack={() => openHub(detail.position!)}
+                onNewChat={() => startNewChat(detail.position!)}
+                onRename={renameThread}
+                position={detail.position}
+                thread={activeThread ?? detail}
+              />
+            ) : null}
+            <ThreadChat
+              history={detail.messages}
+              key={`thread:${detail.id}`}
+              onTurnSettled={() => void refreshThreads()}
+              position={
+                detail.position ?? {
+                  securityId: '',
+                  exchangeSegment: '',
+                  productType: '',
+                  symbol: detail.title ?? 'position',
+                }
               }
-            }
-            session={{ sessionId: detail.eveSessionId, streamIndex: detail.streamIndex }}
-            starters={STARTERS}
-          />
+              session={{ sessionId: detail.eveSessionId, streamIndex: detail.streamIndex }}
+              starters={STARTERS}
+            />
+          </>
         ) : (
           <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
             {detailError ?? 'Loading chat…'}
@@ -390,5 +462,46 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
         </DialogContent>
       </Dialog>
     </main>
+  );
+}
+
+/** Slim bar above a chat: back to the position hub, editable title, new chat. */
+function ChatBar({
+  position,
+  thread,
+  onBack,
+  onNewChat,
+  onRename,
+}: {
+  readonly position: PositionRef;
+  readonly thread: Pick<ThreadSummary, 'id' | 'title'> | null;
+  readonly onBack: () => void;
+  readonly onNewChat: (() => void) | null;
+  readonly onRename: (id: string, title: string) => void | Promise<void>;
+}) {
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-3 border-b px-4 text-sm">
+      <button className="flex shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground" onClick={onBack} type="button">
+        <ChevronLeftIcon className="size-3.5" />
+        <span className="font-medium text-foreground">{position.symbol}</span>
+        <span className="text-xs">· {position.exchangeSegment} · {position.productType}</span>
+      </button>
+      <span className="text-muted-foreground">/</span>
+      {thread ? (
+        <EditableTitle
+          className="min-w-0 flex-1"
+          onSave={(title) => onRename(thread.id, title)}
+          placeholder="New chat"
+          value={thread.title}
+        />
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">New chat</span>
+      )}
+      {onNewChat ? (
+        <Button className="shrink-0" onClick={onNewChat} size="sm" variant="ghost">
+          <MessageSquarePlusIcon className="size-4" /> New chat
+        </Button>
+      ) : null}
+    </div>
   );
 }

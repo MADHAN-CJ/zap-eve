@@ -56,8 +56,13 @@ export async function listThreads(): Promise<ThreadSummary[]> {
   return body.threads;
 }
 
-/** The live thread for a position, or null (the UI resumes instead of forking). */
-export async function findThreadByPosition(position: Omit<PositionRef, 'symbol'>): Promise<ThreadSummary | null> {
+/** Stable key for grouping threads under a position. */
+export function positionKey(p: Pick<PositionRef, 'securityId' | 'exchangeSegment' | 'productType'>): string {
+  return `${p.exchangeSegment}:${p.securityId}:${p.productType}`;
+}
+
+/** That position's threads, newest first. */
+export async function listThreadsByPosition(position: Omit<PositionRef, 'symbol'>): Promise<ThreadSummary[]> {
   const qs = new URLSearchParams({
     securityId: position.securityId,
     exchangeSegment: position.exchangeSegment,
@@ -65,8 +70,18 @@ export async function findThreadByPosition(position: Omit<PositionRef, 'symbol'>
   });
   const res = await fetch(`/api/threads?${qs}`, { headers: authHeaders() });
   if (!res.ok) throw await failure(res);
-  const body = (await res.json()) as { thread: ThreadSummary | null };
-  return body.thread;
+  const body = (await res.json()) as { threads: ThreadSummary[] };
+  return body.threads;
+}
+
+export async function renameThread(id: string, title: string): Promise<ThreadSummary> {
+  const res = await fetch(`/api/threads/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(), 'content-type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw await failure(res);
+  return (await res.json()) as ThreadSummary;
 }
 
 export async function getThread(id: string): Promise<ThreadDetail> {
