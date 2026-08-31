@@ -30,11 +30,21 @@ import { HistoryMessage } from './history-message';
  * app proxy (`host: "/api/eve"`), which owns credentials and continuation
  * tokens; the placeholder token below is never used upstream.
  */
+export interface ComposerAttachment {
+  label: string;
+  sub: string;
+  /** Block to prepend to the next outgoing message (null = none). */
+  buildBlock: () => string | null;
+  onSent: () => void;
+  onClear: () => void;
+}
+
 export function ThreadChat({
   history,
   session,
   position,
   starters,
+  attachment,
   onSessionCreated,
   onTurnSettled,
 }: {
@@ -46,6 +56,8 @@ export function ThreadChat({
   readonly position: { securityId: string; exchangeSegment: string; productType: string; symbol: string };
   /** Starter prompts shown on the empty state; clicking one sends it. */
   readonly starters?: readonly string[];
+  /** Chart selection riding along on outgoing messages. */
+  readonly attachment?: ComposerAttachment | null;
   /** A draft's first send created an eve session (fired once). */
   readonly onSessionCreated?: (eveSessionId: string) => void;
   /** A turn finished (or failed) — refresh sidebar titles/order. */
@@ -90,11 +102,14 @@ export function ThreadChat({
   }, [isBusy, onTurnSettled]);
 
   const handleSubmit = async (message: PromptInputMessage) => {
-    const text = message.text.trim();
-    if ((text.length === 0 && message.files.length === 0) || isBusy) return;
+    const rawText = message.text.trim();
+    if ((rawText.length === 0 && message.files.length === 0) || isBusy) return;
+    const block = attachment?.buildBlock() ?? null;
+    const text = block ? `${block}\n\n${rawText}` : rawText;
 
     if (message.files.length === 0) {
       await agent.send({ message: text });
+      if (block) attachment?.onSent();
       return;
     }
     const parts: UserContent = [];
@@ -108,13 +123,28 @@ export function ThreadChat({
       });
     }
     await agent.send({ message: parts });
+    if (block) attachment?.onSent();
   };
 
   const composer = (
-    <PromptInput onSubmit={handleSubmit}>
-      <PromptInputTextarea placeholder={`Ask about your ${position.symbol} position…`} />
-      <PromptInputSubmit onStop={agent.stop} status={agent.status} />
-    </PromptInput>
+    <div className="composer-stack">
+      {attachment ? (
+        <div aria-label="Selected chart context" className="composer-context">
+          <span className="composer-context-icon">⌁</span>
+          <span>
+            <b>{attachment.label}</b>
+            {attachment.sub}
+          </span>
+          <button aria-label="Remove selected chart context" onClick={attachment.onClear} type="button">
+            ×
+          </button>
+        </div>
+      ) : null}
+      <PromptInput onSubmit={handleSubmit}>
+        <PromptInputTextarea placeholder={`Ask about your ${position.symbol} position…`} />
+        <PromptInputSubmit onStop={agent.stop} status={agent.status} />
+      </PromptInput>
+    </div>
   );
 
   return (
