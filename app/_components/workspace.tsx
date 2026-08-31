@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronLeftIcon, LogOutIcon, MessageSquarePlusIcon, PlugZapIcon } from 'lucide-react';
+import { LogOutIcon, PlugZapIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -31,12 +31,11 @@ import {
   type ThreadSummary,
 } from '@/lib/client/threads-api';
 import { BrokerModal } from './broker-modal';
-import { EditableTitle } from './editable-title';
 import { Login } from './login';
 import { PositionHub } from './position-hub';
 import { PositionsList } from './positions-list';
 import { Sidebar } from './sidebar';
-import { ThreadChat } from './thread-chat';
+import { MarketChat } from './market-chat';
 
 /**
  * The workspace shell: login gate → (broker gate) → sidebar + main pane.
@@ -264,7 +263,6 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
     if (h) return `holding · qty ${h.totalQty} @ ₹${h.avgCostPrice}`;
     return null;
   })();
-  const activeThread = view.kind === 'thread' ? (threads.find((t) => t.id === view.id) ?? null) : null;
 
   const brokerConnected = broker?.status === 'active';
   const brokerExpired = broker?.status === 'token_expired';
@@ -367,53 +365,39 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
             threads={hubThreads}
           />
         ) : view.kind === 'draft' ? (
-          <>
-            <ChatBar
-              onBack={() => openHub(view.position)}
-              onNewChat={null}
-              position={view.position}
-              thread={threads.find((t) => t.id === adoptedThreadId) ?? null}
-              onRename={renameThread}
-            />
-            <ThreadChat
-              history={[]}
-              key={`draft:${view.position.exchangeSegment}:${view.position.securityId}:${view.position.productType}:${draftEpoch}`}
-              onSessionCreated={(sid) => {
+          <MarketChat
+            chat={{
+              history: [],
+              starters: STARTERS,
+              onSessionCreated: (sid) => {
                 setDraftSessionId(sid);
                 void refreshThreads();
-              }}
-              onTurnSettled={() => void refreshThreads()}
-              position={view.position}
-              starters={STARTERS}
-            />
-          </>
+              },
+              onTurnSettled: () => void refreshThreads(),
+            }}
+            key={`draft:${view.position.exchangeSegment}:${view.position.securityId}:${view.position.productType}:${draftEpoch}`}
+            onOpenBroker={() => setBrokerModalOpen(true)}
+            position={view.position}
+          />
         ) : detail ? (
-          <>
-            {detail.position ? (
-              <ChatBar
-                onBack={() => openHub(detail.position!)}
-                onNewChat={() => startNewChat(detail.position!)}
-                onRename={renameThread}
-                position={detail.position}
-                thread={activeThread ?? detail}
-              />
-            ) : null}
-            <ThreadChat
-              history={detail.messages}
-              key={`thread:${detail.id}`}
-              onTurnSettled={() => void refreshThreads()}
-              position={
-                detail.position ?? {
-                  securityId: '',
-                  exchangeSegment: '',
-                  productType: '',
-                  symbol: detail.title ?? 'position',
-                }
+          <MarketChat
+            chat={{
+              history: detail.messages,
+              session: { sessionId: detail.eveSessionId, streamIndex: detail.streamIndex },
+              starters: STARTERS,
+              onTurnSettled: () => void refreshThreads(),
+            }}
+            key={`thread:${detail.id}`}
+            onOpenBroker={() => setBrokerModalOpen(true)}
+            position={
+              detail.position ?? {
+                securityId: '',
+                exchangeSegment: '',
+                productType: '',
+                symbol: detail.title ?? 'position',
               }
-              session={{ sessionId: detail.eveSessionId, streamIndex: detail.streamIndex }}
-              starters={STARTERS}
-            />
-          </>
+            }
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
             {detailError ?? 'Loading chat…'}
@@ -462,46 +446,5 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
         </DialogContent>
       </Dialog>
     </main>
-  );
-}
-
-/** Slim bar above a chat: back to the position hub, editable title, new chat. */
-function ChatBar({
-  position,
-  thread,
-  onBack,
-  onNewChat,
-  onRename,
-}: {
-  readonly position: PositionRef;
-  readonly thread: Pick<ThreadSummary, 'id' | 'title'> | null;
-  readonly onBack: () => void;
-  readonly onNewChat: (() => void) | null;
-  readonly onRename: (id: string, title: string) => void | Promise<void>;
-}) {
-  return (
-    <div className="flex h-10 shrink-0 items-center gap-3 border-b px-4 text-sm">
-      <button className="flex shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground" onClick={onBack} type="button">
-        <ChevronLeftIcon className="size-3.5" />
-        <span className="font-medium text-foreground">{position.symbol}</span>
-        <span className="text-xs">· {position.exchangeSegment} · {position.productType}</span>
-      </button>
-      <span className="text-muted-foreground">/</span>
-      {thread ? (
-        <EditableTitle
-          className="min-w-0 flex-1"
-          onSave={(title) => onRename(thread.id, title)}
-          placeholder="New chat"
-          value={thread.title}
-        />
-      ) : (
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">New chat</span>
-      )}
-      {onNewChat ? (
-        <Button className="shrink-0" onClick={onNewChat} size="sm" variant="ghost">
-          <MessageSquarePlusIcon className="size-4" /> New chat
-        </Button>
-      ) : null}
-    </div>
   );
 }

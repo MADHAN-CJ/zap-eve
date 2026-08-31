@@ -2,6 +2,7 @@
 
 import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message';
 import { stripKickoff } from '@/lib/kickoff';
+import { extractSelectionChip } from '@/lib/chart-selection';
 import { ToolResultChart } from '@/components/charts/tool-result-chart';
 import {
   Tool,
@@ -54,10 +55,16 @@ function pairToolParts(parts: MessagePart[]): PairedTool[] {
 
 export function HistoryMessage({ message }: { readonly message: ApiMessage }) {
   if (message.role === 'user') {
+    const { text, chip } = extractSelectionChip(stripKickoff(message.content));
     return (
       <Message from="user">
         <MessageContent>
-          <MessageResponse>{stripKickoff(message.content)}</MessageResponse>
+          {chip ? (
+            <span className="flex items-center gap-1.5 text-xs opacity-80">
+              ⌁ Chart selection · {chip.count} candles · {chip.from} → {chip.to}
+            </span>
+          ) : null}
+          <MessageResponse>{text}</MessageResponse>
         </MessageContent>
       </Message>
     );

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { stripKickoff } from "@/lib/kickoff";
+import { extractSelectionChip } from "@/lib/chart-selection";
 import { ToolResultChart } from "@/components/charts/tool-result-chart";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import {
@@ -58,6 +59,17 @@ export function AgentMessage({
       from={message.role}
     >
       <MessageContent>
+        {(() => {
+          if (message.role !== "user") return null;
+          const raw = message.parts.find((p) => p.type === "text")?.text ?? "";
+          const { chip } = extractSelectionChip(stripKickoff(raw));
+          if (!chip) return null;
+          return (
+            <span className="flex items-center gap-1.5 text-xs opacity-80">
+              ⌁ Chart selection · {chip.count} candles · {chip.from} → {chip.to}
+            </span>
+          );
+        })()}
         {message.parts.map((part, index) => (
           <AgentMessagePart
             canRespond={canRespond}
@@ -66,7 +78,7 @@ export function AgentMessage({
             onInputResponses={onInputResponses}
             part={
               message.role === "user" && part.type === "text"
-                ? { ...part, text: stripKickoff(part.text) }
+                ? { ...part, text: extractSelectionChip(stripKickoff(part.text)).text }
                 : part
             }
             showCaret={isStreaming && message.role === "assistant" && index === lastTextIndex}

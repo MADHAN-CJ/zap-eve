@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import "./globals.css";
+import "./markets.css";
 
 const sans = Geist({
   variable: "--font-sans",
