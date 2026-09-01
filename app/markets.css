@@ -170,6 +170,15 @@
 .mkts .ai-header > button:last-child { margin-left: auto; border: 1px solid #e2e8e4; background: transparent; color: #6f7d75; font-size: 14px; width: 28px; height: 28px; border-radius: 6px; }
 .mkts .ai-panel .conversation, .mkts .ai-panel [class*="max-w-3xl"] { max-width: 100%; }
 
+/* indicator toggle menu (chart toolbar) */
+.mkts .indicator-menu { position: relative; }
+.mkts .indicator-menu > button.active { color: #0c6b3d; background: #e3f3ea; }
+.mkts .indicator-dropdown { position: absolute; z-index: 6; top: calc(100% + 6px); left: 0; display: grid; gap: 2px; min-width: 172px; padding: 6px; border: 1px solid #e2e8e4; border-radius: 8px; background: #ffffff; box-shadow: 0 10px 32px #0f1f1626; }
+.mkts .indicator-dropdown label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; color: #3a4a41; font-size: 11px; cursor: pointer; }
+.mkts .indicator-dropdown label:hover { background: #eef2ef; }
+.mkts .indicator-dropdown input { accent-color: #0c6b3d; }
+.mkts .indicator-nodata { margin-left: auto; padding-left: 10px; color: #b3261e; font-size: 9px; font-style: normal; white-space: nowrap; }
+
 .mkts .zoom-controls { display: inline-flex; align-items: center; gap: 4px; }
 .mkts .zoom-controls button { display: grid; place-items: center; min-width: 26px; height: 26px; padding: 0 8px; border: 1px solid #e2e8e4; border-radius: 6px; background: #ffffff; color: #3a4a41; font-size: 14px; line-height: 1; }
 .mkts .zoom-controls button:hover:not(:disabled) { border-color: #0c6b3d; color: #0c6b3d; }

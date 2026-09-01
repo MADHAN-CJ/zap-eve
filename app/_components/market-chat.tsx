@@ -10,7 +10,9 @@ import {
   selectionBounds,
   type ChartSelection,
 } from '@/lib/chart-selection';
-import { applyDefaultZoom, InteractiveChart, smoothZoomBy, type ChartCandle, type RangeSelection } from './interactive-chart';
+import { drawingsKey, loadDrawings, saveDrawings, type Drawing, type DrawingTool } from '@/lib/chart-drawings';
+import { computeIndicators, INDICATOR_LABELS, INDICATOR_MIN_BARS, type IndicatorKey } from '@/lib/indicators';
+import { applyDefaultZoom, InteractiveChart, smoothZoomBy, type ChartCandle, type LiveBarUpdate, type RangeSelection } from './interactive-chart';
 import { ThreadChat, type ComposerAttachment } from './thread-chat';
 
 type Interval = '1min' | '5min' | '15min' | '1h' | '1day';
@@ -29,6 +31,38 @@ const volumeFormatter = new Intl.NumberFormat('en-IN', { notation: 'compact', ma
 const IST_OFFSET_MS = 5.5 * 3600 * 1000;
 const istLabel = (epochS: number) =>
   new Date(epochS * 1000 + IST_OFFSET_MS).toLocaleString('en-IN', { timeZone: 'UTC', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+const INTERVAL_SECONDS: Record<Interval, number> = { '1min': 60, '5min': 300, '15min': 900, '1h': 3600, '1day': 86400 };
+const QUOTE_POLL_MS = 5000;
+const INDICATORS_STORAGE_KEY = 'zap-eve.indicators.v1';
+
+function loadStoredIndicators(): IndicatorKey[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(INDICATORS_STORAGE_KEY) ?? '[]') as unknown;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((k): k is IndicatorKey => typeof k === 'string' && k in INDICATOR_LABELS);
+  } catch {
+    return [];
+  }
+}
+
+function isNseMarketOpen(): boolean {
+  const ist = new Date(Date.now() + IST_OFFSET_MS);
+  const day = ist.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const minutes = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  return minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
+}
+
+const sameIstDay = (aEpochS: number, bEpochS: number) =>
+  new Date(aEpochS * 1000 + IST_OFFSET_MS).toISOString().slice(0, 10) ===
+  new Date(bEpochS * 1000 + IST_OFFSET_MS).toISOString().slice(0, 10);
+
+// must match the MA period InteractiveChart renders
+function lastMovingAverage(rows: ChartCandle[], period = 12): number {
+  const slice = rows.slice(Math.max(0, rows.length - period));
+  return slice.reduce((sum, c) => sum + c.close, 0) / slice.length;
+}
 
 export interface ThreadChatBinding {
   history: React.ComponentProps<typeof ThreadChat>['history'];
@@ -55,7 +89,72 @@ export function MarketChat({
   const [selection, setSelection] = React.useState<RangeSelection | null>(null);
   const [selectionSent, setSelectionSent] = React.useState(false);
   const [selectionMode, setSelectionMode] = React.useState(false);
+  const [activeTool, setActiveTool] = React.useState<DrawingTool | null>(null);
+  const [drawings, setDrawings] = React.useState<Drawing[]>([]);
+  const [selectedDrawingId, setSelectedDrawingId] = React.useState<string | null>(null);
   const chartApiRef = React.useRef<IChartApi | null>(null);
+  const liveRef = React.useRef<LiveBarUpdate | null>(null);
+  // day-volume total at the live bar's start; live bar volume = day total − base
+  const volumeBaseRef = React.useRef<number | null>(null);
+  const resyncAtRef = React.useRef(0);
+  const [liveTick, setLiveTick] = React.useState(0);
+  const [activeIndicators, setActiveIndicators] = React.useState<IndicatorKey[]>([]);
+  const [indicatorMenuOpen, setIndicatorMenuOpen] = React.useState(false);
+
+  // restore persisted toggles after mount (not in the initializer — SSR/hydration)
+  React.useEffect(() => {
+    const stored = loadStoredIndicators();
+    if (stored.length > 0) setActiveIndicators(stored);
+  }, []);
+
+  // drawings live per position+interval (D5)
+  const storageKey = drawingsKey(position, interval);
+  React.useEffect(() => {
+    setDrawings(loadDrawings(storageKey));
+    setSelectedDrawingId(null);
+    setActiveTool(null);
+  }, [storageKey]);
+
+  const addDrawing = React.useCallback((drawing: Drawing) => {
+    setDrawings((current) => {
+      const next = [...current, drawing];
+      saveDrawings(storageKey, next);
+      return next;
+    });
+    setActiveTool(null); // one drawing per arm, like the real thing
+    setSelectedDrawingId(drawing.id);
+  }, [storageKey]);
+
+  const deleteSelectedDrawing = React.useCallback(() => {
+    setSelectedDrawingId((id) => {
+      if (id !== null) {
+        setDrawings((current) => {
+          const next = current.filter((d) => d.id !== id);
+          saveDrawings(storageKey, next);
+          return next;
+        });
+      }
+      return null;
+    });
+  }, [storageKey]);
+
+  React.useEffect(() => {
+    if (selectedDrawingId === null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      deleteSelectedDrawing();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selectedDrawingId, deleteSelectedDrawing]);
+
+  const armTool = (tool: DrawingTool) => {
+    setActiveTool((current) => (current === tool ? null : tool));
+    setSelectionMode(false);
+    setSelectedDrawingId(null);
+  };
 
   const loadCandles = React.useCallback(async () => {
     setDataState('loading');
@@ -89,7 +188,8 @@ export function MarketChat({
       const rows = payload.candles
         .map((c) => ({ ...c, time: Number((c as { timestamp?: number }).timestamp ?? c.time) }))
         .filter((c) => Number.isFinite(c.time) && Number.isFinite(c.close));
-      setCandles(rows.slice(-500));
+      setCandles(rows.slice(-1500)); // deep tail so EMA200 converges; render cost is fine
+      volumeBaseRef.current = null;
       setDataState('live');
       setDataMessage(`Dhan data updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`);
     } catch (error) {
@@ -105,11 +205,107 @@ export function MarketChat({
     void loadCandles();
   }, [loadCandles]);
 
+  // Live bar: poll the quote endpoint during market hours and patch the last
+  // candle in place (via liveRef → series.update) so pan/zoom survive.
+  React.useEffect(() => {
+    if (dataState !== 'live' || candles.length === 0) return;
+    let stopped = false;
+    const step = INTERVAL_SECONDS[interval];
+
+    const tick = async () => {
+      if (stopped || !isNseMarketOpen()) return;
+      let quote: { lastPrice: number; volume: number } | null = null;
+      try {
+        const qs = new URLSearchParams({ securityId: position.securityId, exchangeSegment: position.exchangeSegment });
+        const res = await fetch(`/api/broker/quote?${qs}`, { headers: authHeaders() });
+        if (res.status === 409) {
+          stopped = true;
+          window.clearInterval(timer);
+          return;
+        }
+        if (!res.ok) return;
+        quote = ((await res.json()) as { quote?: { lastPrice: number; volume: number } }).quote ?? null;
+      } catch {
+        return; // transient network error — next tick retries
+      }
+      if (stopped || !quote || !Number.isFinite(quote.lastPrice)) return;
+
+      const last = candles[candles.length - 1];
+      const nowS = Math.floor(Date.now() / 1000);
+      const ltp = quote.lastPrice;
+
+      let bar: ChartCandle;
+      if (interval === '1day') {
+        // only today's forming daily bar; dailies are never rolled client-side
+        if (!sameIstDay(last.time, nowS)) return;
+        bar = { ...last, close: ltp, high: Math.max(last.high, ltp), low: Math.min(last.low, ltp), volume: quote.volume || last.volume };
+        candles[candles.length - 1] = bar;
+      } else if (nowS >= last.time + 2 * step) {
+        // too far behind (e.g. market opened on stale data) — refetch rather than guess bars
+        if (Date.now() - resyncAtRef.current > 60_000) {
+          resyncAtRef.current = Date.now();
+          void loadCandles();
+        }
+        return;
+      } else {
+        if (volumeBaseRef.current === null) volumeBaseRef.current = quote.volume - last.volume;
+        if (nowS >= last.time + step) {
+          volumeBaseRef.current = quote.volume;
+          bar = { time: last.time + step, open: ltp, high: ltp, low: ltp, close: ltp, volume: 0 };
+          candles.push(bar);
+        } else {
+          bar = { ...last, close: ltp, high: Math.max(last.high, ltp), low: Math.min(last.low, ltp), volume: Math.max(0, quote.volume - volumeBaseRef.current) };
+          candles[candles.length - 1] = bar;
+        }
+      }
+      liveRef.current?.(bar, lastMovingAverage(candles));
+      setLiveTick((t) => t + 1);
+      setDataMessage(`Live · ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
+    };
+
+    const timer = window.setInterval(() => void tick(), QUOTE_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [dataState, candles, interval, position.securityId, position.exchangeSegment, loadCandles]);
+
+  // recomputed on load AND on every live tick (candles is mutated in place)
+  const indicatorData = React.useMemo(() => {
+    void liveTick;
+    return activeIndicators.length > 0 && candles.length > 0 ? computeIndicators(candles, activeIndicators) : undefined;
+  }, [candles, activeIndicators, liveTick]);
+
+  const toggleIndicator = (key: IndicatorKey) =>
+    setActiveIndicators((current) => {
+      const next = current.includes(key) ? current.filter((k) => k !== key) : [...current, key];
+      try {
+        localStorage.setItem(INDICATORS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // storage unavailable (private mode) — toggles still work for the session
+      }
+      return next;
+    });
+
+  React.useEffect(() => {
+    if (!indicatorMenuOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement | null)?.closest('.indicator-menu')) setIndicatorMenuOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [indicatorMenuOpen]);
+
   const latest = candles[candles.length - 1] ?? null;
   const first = candles[0] ?? null;
   const displayedCandle = hoveredCandle || latest;
+  const displayedIndex = displayedCandle ? candles.findIndex((c) => c.time === displayedCandle.time) : -1;
   const change = latest && first ? latest.close - first.open : 0;
   const changePercent = latest && first && first.open ? (change / first.open) * 100 : 0;
+  const iv = (values: Array<number | null> | undefined, digits = 2) => {
+    const v = displayedIndex >= 0 ? values?.[displayedIndex] : null;
+    return typeof v === 'number' ? v.toFixed(digits) : '—';
+  };
 
   const handleSelection = React.useCallback((next: RangeSelection) => {
     setSelection(next);
@@ -167,10 +363,38 @@ export function MarketChat({
                 ))}
               </div>
               <div className="toolbar-divider" />
-              <button className={selectionMode ? 'active select-range-button' : 'select-range-button'} onClick={() => setSelectionMode((a) => !a)} title="Select a candle range for the analyst" type="button">
+              <button className={selectionMode ? 'active select-range-button' : 'select-range-button'} onClick={() => { setSelectionMode((a) => !a); setActiveTool(null); }} title="Select a candle range for the analyst" type="button">
                 <span aria-hidden="true" className="icon">⌁</span> {selectionMode ? 'Selecting' : 'Select range'}
               </button>
               {selection && <button className="clear-selection" onClick={clearSelection} title="Clear selected candles" type="button">Clear selection</button>}
+              <button className={activeTool === 'trend' ? 'active' : ''} onClick={() => armTool('trend')} title="Draw a trend line (drag between two points)" type="button">
+                <span aria-hidden="true" className="icon">╱</span> Trend
+              </button>
+              <button className={activeTool === 'horizontal' ? 'active' : ''} onClick={() => armTool('horizontal')} title="Draw a horizontal price line (click a price)" type="button">
+                <span aria-hidden="true" className="icon">─</span> Level
+              </button>
+              {selectedDrawingId ? (
+                <button className="clear-selection" onClick={deleteSelectedDrawing} title="Delete the selected line (Del)" type="button">Delete line</button>
+              ) : null}
+              <div className="toolbar-divider" />
+              <div className="indicator-menu">
+                <button className={activeIndicators.length > 0 ? 'active' : ''} onClick={() => setIndicatorMenuOpen((o) => !o)} title="Toggle indicators" type="button">
+                  <span aria-hidden="true" className="icon">∿</span> Indicators{activeIndicators.length > 0 ? ` · ${activeIndicators.length}` : ''}
+                </button>
+                {indicatorMenuOpen ? (
+                  <div className="indicator-dropdown">
+                    {(Object.keys(INDICATOR_LABELS) as IndicatorKey[]).map((key) => (
+                      <label key={key}>
+                        <input checked={activeIndicators.includes(key)} onChange={() => toggleIndicator(key)} type="checkbox" />
+                        {INDICATOR_LABELS[key]}
+                        {candles.length > 0 && candles.length < INDICATOR_MIN_BARS[key] ? (
+                          <em className="indicator-nodata">needs {INDICATOR_MIN_BARS[key]} bars · have {candles.length}</em>
+                        ) : null}
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <div className="toolbar-spacer" />
               <button disabled={dataState === 'loading'} onClick={() => void loadCandles()} title="Refresh market data" type="button"><span aria-hidden="true" className="icon">↻</span> Refresh</button>
             </div>
@@ -184,6 +408,18 @@ export function MarketChat({
                   <span>L <b>₹{numberFormatter.format(displayedCandle.low)}</b></span>
                   <span>C <b className={displayedCandle.close >= displayedCandle.open ? 'positive' : 'negative'}>₹{numberFormatter.format(displayedCandle.close)}</b></span>
                   <span>VOL <b>{volumeFormatter.format(displayedCandle.volume)}</b></span>
+                  {indicatorData?.ema50 && <span>EMA50 <b style={{ color: '#d97706' }}>{iv(indicatorData.ema50)}</b></span>}
+                  {indicatorData?.ema200 && <span>EMA200 <b style={{ color: '#7c3aed' }}>{iv(indicatorData.ema200)}</b></span>}
+                  {indicatorData?.bollinger && (
+                    <span>BB <b style={{ color: '#5b8bc4' }}>{iv(indicatorData.bollinger.lower)} · {iv(indicatorData.bollinger.middle)} · {iv(indicatorData.bollinger.upper)}</b></span>
+                  )}
+                  {indicatorData?.rsi && <span>RSI <b style={{ color: '#7c3aed' }}>{iv(indicatorData.rsi, 1)}</b></span>}
+                  {indicatorData?.macd && (
+                    <span>MACD <b style={{ color: '#2a78d6' }}>{iv(indicatorData.macd.macd)}</b> / <b style={{ color: '#d97706' }}>{iv(indicatorData.macd.signal)}</b></span>
+                  )}
+                  {indicatorData?.dmi && (
+                    <span>DMI <b style={{ color: '#0c6b3d' }}>+{iv(indicatorData.dmi.plusDi, 1)}</b> <b style={{ color: '#b3261e' }}>−{iv(indicatorData.dmi.minusDi, 1)}</b> ADX <b>{iv(indicatorData.dmi.adx, 1)}</b></span>
+                  )}
                 </>
               ) : null}
               <span className={`data-label ${dataState === 'live' ? 'live' : dataState === 'loading' ? 'loading' : 'error'}`}>
@@ -195,8 +431,15 @@ export function MarketChat({
               {candles.length > 0 ? (
                 <>
                   <InteractiveChart
+                    activeTool={activeTool}
                     candles={candles}
                     chartApiRef={chartApiRef}
+                    drawings={drawings}
+                    indicators={indicatorData}
+                    onDrawingComplete={addDrawing}
+                    onSelectDrawing={setSelectedDrawingId}
+                    selectedDrawingId={selectedDrawingId}
+                    liveRef={liveRef}
                     onHover={setHoveredCandle}
                     onSelection={handleSelection}
                     selection={selection}
@@ -238,6 +481,10 @@ export function MarketChat({
                   <span className="selection-summary">{selection.candles.length} candles selected</span>
                 ) : selectionMode ? (
                   <span>Drag across candles to select a range for the analyst</span>
+                ) : activeTool === 'trend' ? (
+                  <span>Drag between two points to draw a trend line</span>
+                ) : activeTool === 'horizontal' ? (
+                  <span>Click a price to drop a horizontal level</span>
                 ) : null}
               </div>
             </footer>
