@@ -38,6 +38,15 @@ export interface Candle {
   openInterest?: number;
 }
 
+export interface QuoteTick {
+  lastPrice: number;
+  volume: number; // cumulative day volume
+  dayOpen?: number;
+  dayHigh?: number;
+  dayLow?: number;
+  lastTradeTime?: string;
+}
+
 export interface OptionChainSide {
   greeks?: { delta?: number; theta?: number; gamma?: number; vega?: number };
   implied_volatility?: number;
@@ -203,6 +212,43 @@ export const dhan = {
       for (const id of Object.keys(d[seg] ?? {})) {
         const lp = Number(d[seg][id]?.last_price);
         if (Number.isFinite(lp)) out[seg][id] = lp;
+      }
+    }
+    return out;
+  },
+
+  /** Batched full quotes (LTP + day volume/OHLC): {SEGMENT: [securityId, …]}. */
+  async getQuote(creds: DhanCreds, req: Record<string, number[]>): Promise<Record<string, Record<string, QuoteTick>>> {
+    await quoteThrottle.acquire();
+    const d = unwrap<
+      Record<
+        string,
+        Record<
+          string,
+          {
+            last_price?: number;
+            volume?: number;
+            ohlc?: { open?: number; high?: number; low?: number; close?: number };
+            last_trade_time?: string;
+          }
+        >
+      >
+    >(await request(creds, 'getQuote', '/marketfeed/quote', { method: 'POST', body: req }));
+    const out: Record<string, Record<string, QuoteTick>> = {};
+    for (const seg of Object.keys(d ?? {})) {
+      out[seg] = {};
+      for (const id of Object.keys(d[seg] ?? {})) {
+        const q = d[seg][id];
+        const lp = Number(q?.last_price);
+        if (!Number.isFinite(lp)) continue;
+        out[seg][id] = {
+          lastPrice: lp,
+          volume: Number(q?.volume ?? 0),
+          dayOpen: Number.isFinite(Number(q?.ohlc?.open)) ? Number(q?.ohlc?.open) : undefined,
+          dayHigh: Number.isFinite(Number(q?.ohlc?.high)) ? Number(q?.ohlc?.high) : undefined,
+          dayLow: Number.isFinite(Number(q?.ohlc?.low)) ? Number(q?.ohlc?.low) : undefined,
+          lastTradeTime: q?.last_trade_time,
+        };
       }
     }
     return out;

@@ -21,7 +21,10 @@ const query = z.object({
 });
 
 const INTRADAY_MINUTES = { '1min': 1, '5min': 5, '15min': 15, '1h': 60 } as const;
-const DEFAULT_DAYS = { '1min': 2, '5min': 5, '15min': 10, '1h': 30, '1day': 365 } as const;
+// deep enough that a 200-period EMA CONVERGES (not merely warms up) — EMA
+// seeding error decays by (1−2/201)^bars, so ~1300+ bars ≈ fully converged
+// (NSE ≈ 26×15m / 78×5m / 6.5×1h bars per trading day; Dhan caps intraday at 90d/call)
+const DEFAULT_DAYS = { '1min': 4, '5min': 30, '15min': 60, '1h': 90, '1day': 2000 } as const;
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
