@@ -15,5 +15,4 @@ usage-log.ndjson
 backend/
 frontend/
 docs/
-scripts/p5-live-check.ts
-scripts/test-indicators.ts
+scripts/

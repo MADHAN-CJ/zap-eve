@@ -45,6 +45,39 @@ export interface IndicatorData {
   dmi?: DmiResult;
 }
 
+/**
+ * Active-indicator values for candles [startIndex..endIndex], as named CSV
+ * columns for the AI chart-selection envelope (P6). Column order mirrors the
+ * IndicatorData key order; names are stable — instructions.md documents them.
+ */
+export function indicatorColumnsForRange(
+  data: IndicatorData,
+  startIndex: number,
+  endIndex: number,
+): Array<{ name: string; values: Array<number | null> }> {
+  const slice = (values: IndicatorSeriesValues) => values.slice(startIndex, endIndex + 1);
+  const columns: Array<{ name: string; values: Array<number | null> }> = [];
+  if (data.ema50) columns.push({ name: 'ema50', values: slice(data.ema50) });
+  if (data.ema200) columns.push({ name: 'ema200', values: slice(data.ema200) });
+  if (data.bollinger) {
+    columns.push({ name: 'bb_up', values: slice(data.bollinger.upper) });
+    columns.push({ name: 'bb_mid', values: slice(data.bollinger.middle) });
+    columns.push({ name: 'bb_low', values: slice(data.bollinger.lower) });
+  }
+  if (data.rsi) columns.push({ name: 'rsi14', values: slice(data.rsi) });
+  if (data.macd) {
+    columns.push({ name: 'macd', values: slice(data.macd.macd) });
+    columns.push({ name: 'macd_sig', values: slice(data.macd.signal) });
+    columns.push({ name: 'macd_hist', values: slice(data.macd.histogram) });
+  }
+  if (data.dmi) {
+    columns.push({ name: 'di_plus', values: slice(data.dmi.plusDi) });
+    columns.push({ name: 'di_minus', values: slice(data.dmi.minusDi) });
+    columns.push({ name: 'adx', values: slice(data.dmi.adx) });
+  }
+  return columns;
+}
+
 export function computeIndicators(
   candles: IndicatorCandle[],
   active: readonly IndicatorKey[],
@@ -90,6 +123,9 @@ function padFront(values: number[], length: number): IndicatorSeriesValues {
 
 export function computeEma(closes: number[], period: number): IndicatorSeriesValues {
   if (closes.length < period) return closes.map(() => null);
+  // seeded from the first bar (same convention as TradingView's ta.ema), so the
+  // output is full-length — early values carry seed influence and converge as
+  // (1−2/(period+1))^bars; the chart loads ≥1300 bars so the tail is exact
   return padFront(ta.ema(closes, period), closes.length);
 }
 

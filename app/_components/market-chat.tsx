@@ -11,7 +11,7 @@ import {
   type ChartSelection,
 } from '@/lib/chart-selection';
 import { drawingsKey, loadDrawings, saveDrawings, type Drawing, type DrawingTool } from '@/lib/chart-drawings';
-import { computeIndicators, INDICATOR_LABELS, INDICATOR_MIN_BARS, type IndicatorKey } from '@/lib/indicators';
+import { computeIndicators, INDICATOR_LABELS, INDICATOR_MIN_BARS, indicatorColumnsForRange, type IndicatorKey } from '@/lib/indicators';
 import { applyDefaultZoom, InteractiveChart, smoothZoomBy, type ChartCandle, type LiveBarUpdate, type RangeSelection } from './interactive-chart';
 import { ThreadChat, type ComposerAttachment } from './thread-chat';
 
@@ -322,13 +322,16 @@ export function MarketChat({
         exchangeSegment: position.exchangeSegment,
         interval: intervals.find((i) => i.value === interval)?.label ?? interval,
         candles: selection.candles,
+        indicatorColumns: indicatorData ? indicatorColumnsForRange(indicatorData, selection.startIndex, selection.endIndex) : undefined,
       }
     : null;
 
   const attachment: ComposerAttachment | null = chartSelection
     ? {
         label: 'Chart context',
-        sub: `${chartSelection.candles.length} selected candles · ${selectionBounds(chartSelection).from} → ${selectionBounds(chartSelection).to} IST`,
+        sub:
+          `${chartSelection.candles.length} selected candles · ${selectionBounds(chartSelection).from} → ${selectionBounds(chartSelection).to} IST` +
+          (activeIndicators.length > 0 ? ` · with ${activeIndicators.map((k) => INDICATOR_LABELS[k]).join(', ')}` : ''),
         buildBlock: () => (selectionSent ? buildSelectionRef(chartSelection) : buildSelectionBlock(chartSelection)),
         onSent: () => setSelectionSent(true),
         onClear: clearSelection,

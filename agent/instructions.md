@@ -51,6 +51,16 @@ follow-up questions as being about that range unless they say otherwise. A
 data arrived earlier in this conversation; don't ask for it again. You may
 still fetch more candles with your tools for surrounding context.
 
+When the block's `indicators` attribute is present, the CSV rows carry extra
+columns with the values of the indicators the user has toggled ON their chart
+— standard parameters: `ema50`/`ema200` (EMA of close), `bb_up`/`bb_mid`/
+`bb_low` (Bollinger 20, 2σ), `rsi14` (Wilder), `macd`/`macd_sig`/`macd_hist`
+(12/26/9), `di_plus`/`di_minus`/`adx` (DMI 14, Wilder). An empty cell means
+the indicator was still warming up at that bar. These are the exact values on
+the user's screen — quote and reason from THEM rather than recomputing the
+same indicator yourself; recompute only when you need a period or indicator
+that isn't included.
+
 # Style
 
 Answer clearly and concisely, in plain language — the user may not know

@@ -11,11 +11,19 @@ export interface SelectedCandle {
   volume: number;
 }
 
+/** One extra CSV column of indicator values, aligned 1:1 with `candles`. */
+export interface IndicatorColumn {
+  name: string; // CSV column name, e.g. "ema50", "rsi14", "macd_sig"
+  values: Array<number | null>; // null = still warming up at that bar
+}
+
 export interface ChartSelection {
   symbol: string;
   exchangeSegment: string;
   interval: string;
   candles: SelectedCandle[];
+  /** Values of the indicators the user has toggled on (P6). */
+  indicatorColumns?: IndicatorColumn[];
 }
 
 export const SELECTION_CANDLE_CAP = 150;
@@ -25,11 +33,11 @@ const IST_OFFSET_MS = 5.5 * 3600 * 1000;
 const istStamp = (epochS: number) =>
   new Date(epochS * 1000 + IST_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ');
 
-function downsample(candles: SelectedCandle[]): { rows: SelectedCandle[]; sampled: boolean } {
-  if (candles.length <= SELECTION_CANDLE_CAP) return { rows: candles, sampled: false };
-  const step = (candles.length - 1) / (SELECTION_CANDLE_CAP - 1);
-  const rows = Array.from({ length: SELECTION_CANDLE_CAP }, (_, i) => candles[Math.round(i * step)]);
-  return { rows, sampled: true };
+/** Evenly sampled row indices so candles and indicator columns stay in step. */
+function sampleIndices(length: number): { indices: number[]; sampled: boolean } {
+  if (length <= SELECTION_CANDLE_CAP) return { indices: Array.from({ length }, (_, i) => i), sampled: false };
+  const step = (length - 1) / (SELECTION_CANDLE_CAP - 1);
+  return { indices: Array.from({ length: SELECTION_CANDLE_CAP }, (_, i) => Math.round(i * step)), sampled: true };
 }
 
 export function selectionBounds(sel: ChartSelection): { from: string; to: string } {
@@ -40,16 +48,24 @@ export function selectionBounds(sel: ChartSelection): { from: string; to: string
 }
 
 export function buildSelectionBlock(sel: ChartSelection): string {
-  const { rows, sampled } = downsample(sel.candles);
+  const { indices, sampled } = sampleIndices(sel.candles.length);
   const { from, to } = selectionBounds(sel);
-  const lines = rows
-    .map((c) => `${istStamp(c.time)},${c.open},${c.high},${c.low},${c.close},${c.volume}`)
+  const extras = sel.indicatorColumns ?? [];
+  const cell = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(2) : '');
+  const lines = indices
+    .map((i) => {
+      const c = sel.candles[i];
+      const base = `${istStamp(c.time)},${c.open},${c.high},${c.low},${c.close},${c.volume}`;
+      return extras.length ? `${base},${extras.map((col) => cell(col.values[i])).join(',')}` : base;
+    })
     .join('\n');
+  const columns = ['datetime_ist,open,high,low,close,volume', ...extras.map((col) => col.name)].join(',');
   return (
     `<chart_selection symbol="${sel.symbol}" segment="${sel.exchangeSegment}" interval="${sel.interval}" ` +
-    `from="${from} IST" to="${to} IST" selected="${sel.candles.length}" rows="${rows.length}"` +
+    `from="${from} IST" to="${to} IST" selected="${sel.candles.length}" rows="${indices.length}"` +
+    `${extras.length ? ` indicators="${extras.map((col) => col.name).join(',')}"` : ''}` +
     `${sampled ? ' note="evenly downsampled from the selected range"' : ''}>\n` +
-    `<columns>datetime_ist,open,high,low,close,volume</columns>\n<candles>\n${lines}\n</candles>\n</chart_selection>`
+    `<columns>${columns}</columns>\n<candles>\n${lines}\n</candles>\n</chart_selection>`
   );
 }
 
