@@ -76,10 +76,12 @@ export function MarketChat({
   position,
   chat,
   onOpenBroker,
+  brokerActive,
 }: {
   readonly position: PositionRef;
   readonly chat: ThreadChatBinding;
   readonly onOpenBroker: () => void;
+  readonly brokerActive: boolean;
 }) {
   const [interval, setInterval] = React.useState<Interval>('15min');
   const [candles, setCandles] = React.useState<ChartCandle[]>([]);
@@ -156,6 +158,9 @@ export function MarketChat({
     setSelectedDrawingId(null);
   };
 
+  const onOpenBrokerRef = React.useRef(onOpenBroker);
+  onOpenBrokerRef.current = onOpenBroker;
+
   const loadCandles = React.useCallback(async () => {
     setDataState('loading');
     setDataMessage('Fetching candles from Dhan…');
@@ -181,7 +186,7 @@ export function MarketChat({
         setCandles([]);
         setDataState('not_connected');
         setDataMessage(payload?.error ?? 'Dhan is not connected.');
-        onOpenBroker();
+        onOpenBrokerRef.current();
         return;
       }
       if (!res.ok || !payload?.candles) throw new Error(payload?.error || 'Could not load candles.');
@@ -197,7 +202,7 @@ export function MarketChat({
       setDataState('error');
       setDataMessage(error instanceof Error ? error.message : 'Could not load market data.');
     }
-  }, [position.securityId, position.exchangeSegment, position.productType, position.symbol, interval, onOpenBroker]);
+  }, [position.securityId, position.exchangeSegment, position.productType, position.symbol, interval]);
 
   React.useEffect(() => {
     setSelection(null);
@@ -205,8 +210,11 @@ export function MarketChat({
     void loadCandles();
   }, [loadCandles]);
 
-  // Live bar: poll the quote endpoint during market hours and patch the last
-  // candle in place (via liveRef → series.update) so pan/zoom survive.
+  React.useEffect(() => {
+    if (brokerActive && dataState === 'not_connected') void loadCandles();
+  }, [brokerActive, dataState, loadCandles]);
+
+
   React.useEffect(() => {
     if (dataState !== 'live' || candles.length === 0) return;
     let stopped = false;

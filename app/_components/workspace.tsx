@@ -120,6 +120,8 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
     if (broker?.status === 'active') void refreshPositions();
   }, [broker?.status, refreshPositions]);
 
+  const openBrokerModal = useCallback(() => setBrokerModalOpen(true), []);
+
   // --- Threads (chat history) ---
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const refreshThreads = useCallback(async (): Promise<ThreadSummary[]> => {
@@ -366,6 +368,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
           />
         ) : view.kind === 'draft' ? (
           <MarketChat
+            brokerActive={brokerConnected}
             chat={{
               history: [],
               starters: STARTERS,
@@ -376,11 +379,12 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
               onTurnSettled: () => void refreshThreads(),
             }}
             key={`draft:${view.position.exchangeSegment}:${view.position.securityId}:${view.position.productType}:${draftEpoch}`}
-            onOpenBroker={() => setBrokerModalOpen(true)}
+            onOpenBroker={openBrokerModal}
             position={view.position}
           />
         ) : detail ? (
           <MarketChat
+            brokerActive={brokerConnected}
             chat={{
               history: detail.messages,
               session: { sessionId: detail.eveSessionId, streamIndex: detail.streamIndex },
@@ -388,7 +392,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
               onTurnSettled: () => void refreshThreads(),
             }}
             key={`thread:${detail.id}`}
-            onOpenBroker={() => setBrokerModalOpen(true)}
+            onOpenBroker={openBrokerModal}
             position={
               detail.position ?? {
                 securityId: '',
