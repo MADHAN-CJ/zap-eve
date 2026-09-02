@@ -36,6 +36,13 @@ const INTERVAL_SECONDS: Record<Interval, number> = { '1min': 60, '5min': 300, '1
 const QUOTE_POLL_MS = 5000;
 const INDICATORS_STORAGE_KEY = 'zap-eve.indicators.v1';
 
+const CHAT_PANE_WIDTH_KEY = 'zap-eve:chat-pane-width';
+const CHAT_PANE_DEFAULT = 390;
+const CHAT_PANE_MIN = 300;
+const CHAT_PANE_MAX = 700;
+/** The chart pane never shrinks below this while dragging. */
+const CHART_PANE_MIN = 420;
+
 function loadStoredIndicators(): IndicatorKey[] {
   try {
     const raw = JSON.parse(localStorage.getItem(INDICATORS_STORAGE_KEY) ?? '[]') as unknown;
@@ -95,6 +102,64 @@ export function MarketChat({
   const [drawings, setDrawings] = React.useState<Drawing[]>([]);
   const [selectedDrawingId, setSelectedDrawingId] = React.useState<string | null>(null);
   const chartApiRef = React.useRef<IChartApi | null>(null);
+
+  // --- Chart/chat divider ---
+  const workspaceRef = React.useRef<HTMLDivElement | null>(null);
+  const [chatPaneWidth, setChatPaneWidth] = React.useState(CHAT_PANE_DEFAULT);
+
+  React.useEffect(() => {
+    try {
+      const stored = Number(localStorage.getItem(CHAT_PANE_WIDTH_KEY));
+      if (stored >= CHAT_PANE_MIN && stored <= CHAT_PANE_MAX) setChatPaneWidth(Math.round(stored));
+    } catch {
+      // storage unavailable — keep the default width
+    }
+  }, []);
+
+  const clampChatWidth = (px: number) => {
+    const wsWidth = workspaceRef.current?.getBoundingClientRect().width;
+    const max = Math.max(CHAT_PANE_MIN, Math.min(CHAT_PANE_MAX, wsWidth ? wsWidth - CHART_PANE_MIN : CHAT_PANE_MAX));
+    return Math.round(Math.min(Math.max(px, CHAT_PANE_MIN), max));
+  };
+
+  const commitChatWidth = (px: number) => {
+    setChatPaneWidth(px);
+    try {
+      localStorage.setItem(CHAT_PANE_WIDTH_KEY, String(px));
+    } catch {
+      // storage unavailable — width still applies for this session
+    }
+  };
+
+  const onResizerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const ws = workspaceRef.current;
+    if (!ws) return;
+    e.preventDefault(); // no text selection while dragging
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const wsRight = ws.getBoundingClientRect().right;
+    let latest = chatPaneWidth;
+    const onMove = (ev: PointerEvent) => {
+      latest = clampChatWidth(wsRight - ev.clientX);
+      // write the CSS var directly — no React re-render per pointermove
+      ws.style.setProperty('--chat-w', `${latest}px`);
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      commitChatWidth(latest);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  };
+
+  const onResizerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    commitChatWidth(clampChatWidth(chatPaneWidth + (e.key === 'ArrowLeft' ? 16 : -16)));
+  };
   const liveRef = React.useRef<LiveBarUpdate | null>(null);
   // day-volume total at the live bar's start; live bar volume = day total − base
   const volumeBaseRef = React.useRef<number | null>(null);
@@ -350,7 +415,11 @@ export function MarketChat({
     <div className="mkts flex min-h-0 flex-1 flex-col">
       <div className="terminal-shell flex min-h-0 flex-1 flex-col">
 
-        <div className="workspace min-h-0 flex-1" style={{ minHeight: 0 }}>
+        <div
+          className="workspace min-h-0 flex-1"
+          ref={workspaceRef}
+          style={{ minHeight: 0, '--chat-w': `${chatPaneWidth}px` } as React.CSSProperties}
+        >
           <section aria-labelledby="instrument-heading" className="chart-workspace flex min-h-0 flex-col">
             <div className="instrument-row">
               <div>
@@ -500,6 +569,21 @@ export function MarketChat({
               </div>
             </footer>
           </section>
+
+          <div
+            aria-label="Resize chat panel"
+            aria-orientation="vertical"
+            aria-valuemax={CHAT_PANE_MAX}
+            aria-valuemin={CHAT_PANE_MIN}
+            aria-valuenow={chatPaneWidth}
+            className="pane-resizer"
+            onDoubleClick={() => commitChatWidth(CHAT_PANE_DEFAULT)}
+            onKeyDown={onResizerKeyDown}
+            onPointerDown={onResizerPointerDown}
+            role="separator"
+            tabIndex={0}
+            title="Drag to resize · double-click to reset"
+          />
 
           <aside aria-labelledby="ai-heading" className="ai-panel">
             <div className="ai-context">
