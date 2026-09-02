@@ -2,6 +2,8 @@
 // while it stays active, follow-ups carry only a <chart_selection_ref/> line.
 // Renderers strip both from bubbles and show a chip instead.
 
+import { SELECTION_FULL_RE as FULL_RE, SELECTION_REF_RE as REF_RE } from '@/agent/lib/selection-markup';
+
 export interface SelectedCandle {
   time: number; // epoch seconds
   open: number;
@@ -73,9 +75,6 @@ export function buildSelectionRef(sel: ChartSelection): string {
   const { from, to } = selectionBounds(sel);
   return `<chart_selection_ref symbol="${sel.symbol}" interval="${sel.interval}" from="${from} IST" to="${to} IST" candles="${sel.candles.length}" note="same selection as sent earlier in this conversation"/>`;
 }
-
-const FULL_RE = /<chart_selection\s[^>]*>[\s\S]*?<\/chart_selection>\s*/;
-const REF_RE = /<chart_selection_ref\s[^>]*\/>\s*/;
 
 export interface SelectionChip {
   symbol: string;

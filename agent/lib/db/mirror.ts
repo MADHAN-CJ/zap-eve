@@ -5,6 +5,7 @@ import { messages, sessionContext, threads } from './schema';
 import { costForUsage } from './pricing';
 import type { MessagePart, Usage } from './types';
 import { stripKickoff } from '../kickoff';
+import { stripSelectionMarkup } from '../selection-markup';
 
 /**
  * DB operations behind agent/hooks/persist.ts — the projection of eve's stream
@@ -62,7 +63,7 @@ function evictStaleBuffers(): void {
  * when the row doesn't have one yet; always bumps updated_at.
  */
 async function ensureThread(eveSessionId: string, titleCandidate?: string): Promise<string> {
-  const candidate = titleCandidate ? stripKickoff(titleCandidate).trim() : '';
+  const candidate = titleCandidate ? stripSelectionMarkup(stripKickoff(titleCandidate)).trim() : '';
   const title = candidate ? candidate.slice(0, TITLE_MAX) : null;
   const [row] = await db()
     .insert(threads)

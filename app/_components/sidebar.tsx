@@ -1,11 +1,21 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { ChevronDownIcon, ChevronRightIcon, LayoutListIcon, Trash2Icon, ZapIcon } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  LayoutListIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+  Trash2Icon,
+  ZapIcon,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { positionKey, type PositionRef, type ThreadSummary } from '@/lib/client/threads-api';
 import { EditableTitle } from './editable-title';
+
+const RAIL_COLLAPSED_KEY = 'zap-eve:sidebar-collapsed';
 
 interface PositionGroup {
   key: string;
@@ -41,6 +51,26 @@ export function Sidebar({
   readonly onRename: (id: string, title: string) => void | Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [railCollapsed, setRailCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(RAIL_COLLAPSED_KEY) === '1') setRailCollapsed(true);
+    } catch {
+      // storage unavailable — start expanded
+    }
+  }, []);
+
+  const toggleRail = () =>
+    setRailCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(RAIL_COLLAPSED_KEY, next ? '1' : '0');
+      } catch {
+        // storage unavailable — state still toggles for this session
+      }
+      return next;
+    });
 
   const groups = useMemo<PositionGroup[]>(() => {
     const byKey = new Map<string, PositionGroup>();
@@ -63,13 +93,51 @@ export function Sidebar({
       return next;
     });
 
+  if (railCollapsed) {
+    return (
+      <aside className="flex h-full w-14 shrink-0 flex-col items-center border-r bg-sidebar text-sidebar-foreground">
+        <span className="mt-4 flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <ZapIcon className="size-4" />
+        </span>
+        <button
+          aria-label="Expand sidebar"
+          className="mt-3 rounded-md p-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+          onClick={toggleRail}
+          title="Expand sidebar"
+          type="button"
+        >
+          <PanelLeftOpenIcon className="size-4" />
+        </button>
+        <Button
+          aria-label="Positions"
+          className={cn('mt-2', homeActive && 'bg-accent text-accent-foreground')}
+          onClick={onHome}
+          size="icon-sm"
+          title="Positions"
+          variant="secondary"
+        >
+          <LayoutListIcon className="size-4" />
+        </Button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex items-center gap-2.5 px-4 pt-4 pb-2">
         <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <ZapIcon className="size-4" />
         </span>
-        <span className="font-semibold">Zap</span>
+        <span className="flex-1 font-semibold">Zap</span>
+        <button
+          aria-label="Collapse sidebar"
+          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+          onClick={toggleRail}
+          title="Collapse sidebar"
+          type="button"
+        >
+          <PanelLeftCloseIcon className="size-4" />
+        </button>
       </div>
 
       <div className="px-3 pt-2">
