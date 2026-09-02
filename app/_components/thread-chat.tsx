@@ -45,6 +45,7 @@ export function ThreadChat({
   position,
   starters,
   attachment,
+  contextLine,
   onSessionCreated,
   onTurnSettled,
 }: {
@@ -58,6 +59,9 @@ export function ThreadChat({
   readonly starters?: readonly string[];
   /** Chart selection riding along on outgoing messages. */
   readonly attachment?: ComposerAttachment | null;
+  /** Invisible chart-state line (`<chart_context …/>`) appended to every
+   * outgoing message; stripped from bubbles/titles like the kickoff. */
+  readonly contextLine?: (() => string | null) | null;
   /** A draft's first send created an eve session (fired once). */
   readonly onSessionCreated?: (eveSessionId: string) => void;
   /** A turn finished (or failed) — refresh sidebar titles/order. */
@@ -105,7 +109,9 @@ export function ThreadChat({
     const rawText = message.text.trim();
     if ((rawText.length === 0 && message.files.length === 0) || isBusy) return;
     const block = attachment?.buildBlock() ?? null;
-    const text = block ? `${block}\n\n${rawText}` : rawText;
+    const withBlock = block ? `${block}\n\n${rawText}` : rawText;
+    const ctx = contextLine?.() ?? null;
+    const text = ctx ? (withBlock ? `${withBlock}\n\n${ctx}` : ctx) : withBlock;
 
     if (message.files.length === 0) {
       await agent.send({ message: text });

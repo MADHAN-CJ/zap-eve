@@ -2,7 +2,20 @@
 // while it stays active, follow-ups carry only a <chart_selection_ref/> line.
 // Renderers strip both from bubbles and show a chip instead.
 
-import { SELECTION_FULL_RE as FULL_RE, SELECTION_REF_RE as REF_RE } from '@/agent/lib/selection-markup';
+import {
+  CHART_CONTEXT_RE,
+  SELECTION_FULL_RE as FULL_RE,
+  SELECTION_REF_RE as REF_RE,
+} from '@/agent/lib/selection-markup';
+
+/**
+ * Invisible one-liner appended to every message sent from the chart screen so
+ * the agent knows the chart's interval + toggled indicators (it cannot see
+ * localStorage). Stripped from bubbles and titles like the other markup.
+ */
+export function buildChartContext(interval: string, indicators: readonly string[]): string {
+  return `<chart_context interval="${interval}" indicators="${indicators.join(',')}"/>`;
+}
 
 export interface SelectedCandle {
   time: number; // epoch seconds
@@ -85,12 +98,14 @@ export interface SelectionChip {
 }
 
 export function extractSelectionChip(text: string): { text: string; chip: SelectionChip | null } {
-  const match = text.match(FULL_RE) ?? text.match(REF_RE);
-  if (!match) return { text, chip: null };
+  // The chart_context line is never shown, selection or not.
+  const cleaned = text.replace(CHART_CONTEXT_RE, '');
+  const match = cleaned.match(FULL_RE) ?? cleaned.match(REF_RE);
+  if (!match) return { text: cleaned, chip: null };
   const tag = match[0];
   const attr = (name: string) => tag.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? '';
   return {
-    text: text.replace(FULL_RE, '').replace(REF_RE, '').trim(),
+    text: cleaned.replace(FULL_RE, '').replace(REF_RE, '').trim(),
     chip: {
       symbol: attr('symbol'),
       interval: attr('interval'),

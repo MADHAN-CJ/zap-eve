@@ -220,11 +220,16 @@ export async function onAnyEvent(sessionId: string): Promise<void> {
 }
 
 /** New turn: evict finished buffers (other turns of this session + stale). */
-export function onTurnStarted(sessionId: string, turnId: string): void {
+export async function onTurnStarted(sessionId: string, turnId: string): Promise<void> {
   for (const [key, buf] of buffers) {
     if (buf.sessionId === sessionId && buf.turnId !== turnId) buffers.delete(key);
   }
   evictStaleBuffers();
+  // Busy marker for the watch fire path (see schema.busySince).
+  await db()
+    .update(threads)
+    .set({ busySince: sql`now()` })
+    .where(eq(threads.eveSessionId, sessionId));
 }
 
 export async function onMessageReceived(
@@ -324,6 +329,8 @@ export function onStepCompleted(
  * the buffer is intentionally kept alive for the late approval events.
  */
 export async function onTurnEnded(sessionId: string, turnId: string): Promise<void> {
+  // Idle again, whether or not anything was buffered (crash-restart included).
+  await db().update(threads).set({ busySince: null }).where(eq(threads.eveSessionId, sessionId));
   const buf = buffers.get(bufferKey(sessionId, turnId));
   if (!buf) return;
   // Empty failed turns (no text, no tools, no steps) leave no assistant row.
@@ -343,16 +350,20 @@ export async function onSessionWaiting(
     }
   }
   await backfillOwner(sessionId);
-  if (!continuationToken) return;
+  if (!continuationToken) {
+    await db().update(threads).set({ busySince: null }).where(eq(threads.eveSessionId, sessionId));
+    return;
+  }
   await db()
     .update(threads)
-    .set({ continuationToken, updatedAt: sql`now()` })
+    .set({ continuationToken, busySince: null, updatedAt: sql`now()` })
     .where(eq(threads.eveSessionId, sessionId));
 }
 
 /** Terminal session outcome — drop everything buffered for the session. */
-export function onSessionEnded(sessionId: string): void {
+export async function onSessionEnded(sessionId: string): Promise<void> {
   for (const [key, buf] of buffers) {
     if (buf.sessionId === sessionId) buffers.delete(key);
   }
+  await db().update(threads).set({ busySince: null }).where(eq(threads.eveSessionId, sessionId));
 }

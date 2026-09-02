@@ -15,6 +15,20 @@
       "when": 1787830482900,
       "tag": "0001_glorious_mikhail_rasputin",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788345443068,
+      "tag": "0002_clever_cardiac",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788347411822,
+      "tag": "0003_marvelous_butterfly",
+      "breakpoints": true
     }
   ]
 }

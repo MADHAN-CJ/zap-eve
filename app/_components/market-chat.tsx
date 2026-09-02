@@ -5,6 +5,7 @@ import type { IChartApi } from 'lightweight-charts';
 import { authHeaders } from '@/lib/client/settings';
 import type { PositionRef } from '@/lib/client/threads-api';
 import {
+  buildChartContext,
   buildSelectionBlock,
   buildSelectionRef,
   selectionBounds,
@@ -594,6 +595,7 @@ export function MarketChat({
 
             <ThreadChat
               attachment={attachment}
+              contextLine={() => buildChartContext(interval, activeIndicators)}
               history={chat.history}
               onSessionCreated={chat.onSessionCreated}
               onTurnSettled={chat.onTurnSettled}

@@ -7,6 +7,7 @@ import {
   LayoutListIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
+  RadarIcon,
   Trash2Icon,
   ZapIcon,
 } from 'lucide-react';
@@ -34,7 +35,9 @@ export function Sidebar({
   activeId,
   activePositionKey,
   homeActive,
+  watchersActive,
   onHome,
+  onWatchers,
   onSelect,
   onSelectPosition,
   onDelete,
@@ -44,7 +47,9 @@ export function Sidebar({
   readonly activeId: string;
   readonly activePositionKey: string | null;
   readonly homeActive: boolean;
+  readonly watchersActive: boolean;
   readonly onHome: () => void;
+  readonly onWatchers: () => void;
   readonly onSelect: (id: string) => void;
   readonly onSelectPosition: (position: PositionRef) => void;
   readonly onDelete: (id: string) => void;
@@ -131,6 +136,16 @@ export function Sidebar({
         >
           <LayoutListIcon className="size-4" />
         </Button>
+        <Button
+          aria-label="Watchers"
+          className={cn('mt-2', watchersActive && 'bg-accent text-accent-foreground')}
+          onClick={onWatchers}
+          size="icon-sm"
+          title="Watchers"
+          variant="secondary"
+        >
+          <RadarIcon className="size-4" />
+        </Button>
       </div>
 
       {/* Expanded content — fixed w-64 inner width so text clips instead of reflowing mid-slide. */}
@@ -157,7 +172,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="px-3 pt-2">
+      <div className="flex flex-col gap-1.5 px-3 pt-2">
         <Button
           className={cn('w-full justify-start', homeActive && 'bg-accent text-accent-foreground')}
           onClick={onHome}
@@ -165,6 +180,14 @@ export function Sidebar({
           variant="secondary"
         >
           <LayoutListIcon className="size-4" /> Positions
+        </Button>
+        <Button
+          className={cn('w-full justify-start', watchersActive && 'bg-accent text-accent-foreground')}
+          onClick={onWatchers}
+          size="sm"
+          variant="secondary"
+        >
+          <RadarIcon className="size-4" /> Watchers
         </Button>
       </div>
 

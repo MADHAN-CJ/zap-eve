@@ -58,13 +58,9 @@ export default defineHook({
     async 'session.started'(_event, ctx) {
       await guard('session.started', onSessionStarted(ctx.session.id));
     },
-    'turn.started'(event, ctx) {
+    async 'turn.started'(event, ctx) {
       const d = event.data as { turnId: string };
-      try {
-        onTurnStarted(ctx.session.id, d.turnId);
-      } catch (e) {
-        console.error('[persist] turn.started failed:', e instanceof Error ? e.message : e);
-      }
+      await guard('turn.started', onTurnStarted(ctx.session.id, d.turnId));
     },
     async 'message.received'(event, ctx) {
       const d = event.data as { message: string; sequence: number; turnId: string };
@@ -111,11 +107,11 @@ export default defineHook({
         onSessionWaiting(ctx.session.id, apiContinuationToken(ctx.channel)),
       );
     },
-    'session.completed'(_event, ctx) {
-      onSessionEnded(ctx.session.id);
+    async 'session.completed'(_event, ctx) {
+      await guard('session.completed', onSessionEnded(ctx.session.id));
     },
-    'session.failed'(_event, ctx) {
-      onSessionEnded(ctx.session.id);
+    async 'session.failed'(_event, ctx) {
+      await guard('session.failed', onSessionEnded(ctx.session.id));
     },
   },
 });

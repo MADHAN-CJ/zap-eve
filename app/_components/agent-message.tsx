@@ -18,6 +18,8 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { stripKickoff } from "@/lib/kickoff";
 import { extractSelectionChip } from "@/lib/chart-selection";
 import { ToolResultChart } from "@/components/charts/tool-result-chart";
+import { isWatchTriggerMessage } from "@/agent/lib/watch/trigger-format";
+import { ToolResultWatch } from "./watch-card";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import {
   Tool,
@@ -62,6 +64,13 @@ export function AgentMessage({
         {(() => {
           if (message.role !== "user") return null;
           const raw = message.parts.find((p) => p.type === "text")?.text ?? "";
+          if (isWatchTriggerMessage(raw)) {
+            return (
+              <span className="flex items-center gap-1.5 text-xs opacity-80" title={raw}>
+                ⚡ Watch triggered · automated check
+              </span>
+            );
+          }
           const { chip } = extractSelectionChip(stripKickoff(raw));
           if (!chip) return null;
           return (
@@ -70,20 +79,26 @@ export function AgentMessage({
             </span>
           );
         })()}
-        {message.parts.map((part, index) => (
-          <AgentMessagePart
-            canRespond={canRespond}
-            key={partKey(part, index)}
-            messageStreaming={isStreaming}
-            onInputResponses={onInputResponses}
-            part={
-              message.role === "user" && part.type === "text"
-                ? { ...part, text: extractSelectionChip(stripKickoff(part.text)).text }
-                : part
-            }
-            showCaret={isStreaming && message.role === "assistant" && index === lastTextIndex}
-          />
-        ))}
+        {message.parts.map((part, index) => {
+          // trigger messages render as the chip above — suppress the raw text
+          if (message.role === "user" && part.type === "text" && isWatchTriggerMessage(part.text)) {
+            return null;
+          }
+          return (
+            <AgentMessagePart
+              canRespond={canRespond}
+              key={partKey(part, index)}
+              messageStreaming={isStreaming}
+              onInputResponses={onInputResponses}
+              part={
+                message.role === "user" && part.type === "text"
+                  ? { ...part, text: extractSelectionChip(stripKickoff(part.text)).text }
+                  : part
+              }
+              showCaret={isStreaming && message.role === "assistant" && index === lastTextIndex}
+            />
+          );
+        })}
       </MessageContent>
     </Message>
   );
@@ -150,7 +165,10 @@ function AgentMessagePart({
             </ToolContent>
           </Tool>
           {part.state === "output-available" ? (
-            <ToolResultChart output={part.output} toolName={part.toolName} />
+            <>
+              <ToolResultChart output={part.output} toolName={part.toolName} />
+              <ToolResultWatch output={part.output} toolName={part.toolName} />
+            </>
           ) : null}
         </div>
       );

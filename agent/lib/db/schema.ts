@@ -1,6 +1,15 @@
 import { sql } from 'drizzle-orm';
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { Cost, MessagePart, Role, Usage } from './types';
+import type {
+  WatchCondition,
+  WatchKind,
+  WatchLatched,
+  WatchMode,
+  WatchStatus,
+  WatchValues,
+  WatchVerdict,
+} from '../watch/types';
 
 /**
  * Zap-on-eve schema. threads/messages are written by the persist hook + the
@@ -85,6 +94,13 @@ export const threads = pgTable(
     symbol: text('symbol'),
     /** Latest eve resume handle; rotates every turn (stored on session.waiting). */
     continuationToken: text('continuation_token'),
+    /**
+     * Set on turn.started, cleared when the turn/session ends — "a turn is in
+     * flight". The watch fire path defers rather than sending into an active
+     * turn (eve 0.22 has no turn queue: concurrent sends interleave
+     * nondeterministically). Treat a stale value (>10 min) as idle.
+     */
+    busySince: timestamp('busy_since', { withTimezone: true }),
     /** Resume cursor for useEveAgent (count of mirrored stream events). */
     streamIndex: integer('stream_index').notNull().default(0),
     /** First user message (kickoff stripped, 40 chars) until the user renames it. */
@@ -132,8 +148,68 @@ export const messages = pgTable(
   ],
 );
 
+/**
+ * Market watches (docs/plan-watcher.md). Owned by the sweeper: chat never
+ * implicitly mutates a row (W10) — only the create/cancel/pause tools, the
+ * dashboard actions, and the sweep itself write here. A `levels` watch fires
+ * when its numeric conditions trip (edge-triggered via `latched`); an
+ * `ai_check` watch fires on its cadence clock. Firing continues the watch's
+ * thread; email goes out only when the AI confirms the ask is met.
+ */
+export const watches = pgTable(
+  'watches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => threads.id, { onDelete: 'cascade' }),
+    eveSessionId: text('eve_session_id').notNull(),
+    /** Instrument identity — always the thread's position (W12). */
+    securityId: text('security_id').notNull(),
+    exchangeSegment: text('exchange_segment').notNull(),
+    symbol: text('symbol').notNull(),
+    /** Candle interval the conditions are evaluated on ('1min'…'1day'). */
+    interval: text('interval').notNull(),
+    /** The user's original ask, verbatim — replayed to the AI on every fire. */
+    instruction: text('instruction').notNull(),
+    kind: text('kind').$type<WatchKind>().notNull().default('levels'),
+    /** Numeric conditions (levels watches); null for ai_check. */
+    conditions: jsonb('conditions').$type<WatchCondition[]>(),
+    mode: text('mode').$type<WatchMode>().notNull().default('any'),
+    /** ai_check only: minutes between AI evaluations (15–120). */
+    checkIntervalMinutes: integer('check_interval_minutes'),
+    /** ai_check repeat-alert latch — email only on not_met → met. */
+    lastVerdict: text('last_verdict').$type<WatchVerdict>(),
+    status: text('status').$type<WatchStatus>().notNull().default('ARMED'),
+    /** Metric values at the last sweep (crossing baseline). */
+    lastValues: jsonb('last_values').$type<WatchValues>(),
+    /** Edge-trigger state — see WatchLatched. */
+    latched: jsonb('latched').$type<WatchLatched>(),
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+    lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
+    lastAlertAt: timestamp('last_alert_at', { withTimezone: true }),
+    /** Atomic fire claim — set while a triggered run is in flight (R4-style). */
+    firingAt: timestamp('firing_at', { withTimezone: true }),
+    errorMessage: text('error_message'),
+    /** Hard stop (W8): created + 10 days → EXPIRED, no email. */
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('watches_status_idx').on(t.status),
+    index('watches_thread_idx').on(t.threadId),
+    /** Cap check (W8): count ARMED per user cheaply. */
+    index('watches_user_armed_idx').on(t.userId).where(sql`${t.status} = 'ARMED'`),
+  ],
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type BrokerConnectionRow = typeof brokerConnections.$inferSelect;
 export type SessionContextRow = typeof sessionContext.$inferSelect;
 export type ThreadRow = typeof threads.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
+export type WatchRow = typeof watches.$inferSelect;

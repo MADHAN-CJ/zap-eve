@@ -4,6 +4,8 @@ import { Message, MessageContent, MessageResponse } from '@/components/ai-elemen
 import { stripKickoff } from '@/lib/kickoff';
 import { extractSelectionChip } from '@/lib/chart-selection';
 import { ToolResultChart } from '@/components/charts/tool-result-chart';
+import { isWatchTriggerMessage } from '@/agent/lib/watch/trigger-format';
+import { ToolResultWatch } from './watch-card';
 import {
   Tool,
   ToolContent,
@@ -55,6 +57,17 @@ function pairToolParts(parts: MessagePart[]): PairedTool[] {
 
 export function HistoryMessage({ message }: { readonly message: ApiMessage }) {
   if (message.role === 'user') {
+    if (isWatchTriggerMessage(message.content)) {
+      return (
+        <Message from="user">
+          <MessageContent>
+            <span className="flex items-center gap-1.5 text-xs opacity-80" title={message.content}>
+              ⚡ Watch triggered · automated check
+            </span>
+          </MessageContent>
+        </Message>
+      );
+    }
     const { text, chip } = extractSelectionChip(stripKickoff(message.content));
     return (
       <Message from="user">
@@ -93,7 +106,10 @@ export function HistoryMessage({ message }: { readonly message: ApiMessage }) {
                 </ToolContent>
               </Tool>
               {tool.output !== undefined && !tool.errorText ? (
-                <ToolResultChart output={tool.output} toolName={tool.toolName} />
+                <>
+                  <ToolResultChart output={tool.output} toolName={tool.toolName} />
+                  <ToolResultWatch output={tool.output} toolName={tool.toolName} />
+                </>
               ) : null}
             </div>
           ))}

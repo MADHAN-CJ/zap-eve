@@ -35,6 +35,7 @@ import { Login } from './login';
 import { PositionHub } from './position-hub';
 import { PositionsList } from './positions-list';
 import { Sidebar } from './sidebar';
+import { WatchersPage } from './watchers-page';
 import { MarketChat } from './market-chat';
 
 /**
@@ -47,6 +48,7 @@ import { MarketChat } from './market-chat';
 
 type View =
   | { kind: 'home' }
+  | { kind: 'watchers' }
   | { kind: 'hub'; position: PositionRef }
   | { kind: 'draft'; position: PositionRef }
   | { kind: 'thread'; id: string };
@@ -275,6 +277,8 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
         activeId={sidebarActiveId}
         activePositionKey={activePositionKey}
         homeActive={view.kind === 'home'}
+        onWatchers={() => setView({ kind: 'watchers' })}
+        watchersActive={view.kind === 'watchers'}
         onDelete={(id) => void removeThread(id)}
         onHome={() => {
           setDraftSessionId(null);
@@ -355,6 +359,8 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
               </div>
             </div>
           )
+        ) : view.kind === 'watchers' ? (
+          <WatchersPage onOpenThread={selectThread} />
         ) : view.kind === 'hub' ? (
           <PositionHub
             onBack={() => setView({ kind: 'home' })}

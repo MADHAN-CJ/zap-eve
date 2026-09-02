@@ -1,0 +1,1 @@
+ALTER TABLE "threads" ADD COLUMN "busy_since" timestamp with time zone;
