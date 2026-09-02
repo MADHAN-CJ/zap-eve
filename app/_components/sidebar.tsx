@@ -93,9 +93,22 @@ export function Sidebar({
       return next;
     });
 
-  if (railCollapsed) {
-    return (
-      <aside className="flex h-full w-14 shrink-0 flex-col items-center border-r bg-sidebar text-sidebar-foreground">
+  return (
+    <aside
+      className={cn(
+        'relative h-full shrink-0 overflow-hidden border-r bg-sidebar text-sidebar-foreground',
+        'transition-[width] duration-300 ease-in-out motion-reduce:transition-none',
+        railCollapsed ? 'w-14' : 'w-64',
+      )}
+    >
+      {/* Collapsed rail — cross-fades while the aside width slides. */}
+      <div
+        className={cn(
+          'absolute inset-y-0 left-0 flex w-14 flex-col items-center transition-opacity duration-200 motion-reduce:transition-none',
+          railCollapsed ? 'opacity-100' : 'pointer-events-none opacity-0',
+        )}
+        inert={!railCollapsed}
+      >
         <span className="mt-4 flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <ZapIcon className="size-4" />
         </span>
@@ -118,12 +131,16 @@ export function Sidebar({
         >
           <LayoutListIcon className="size-4" />
         </Button>
-      </aside>
-    );
-  }
+      </div>
 
-  return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+      {/* Expanded content — fixed w-64 inner width so text clips instead of reflowing mid-slide. */}
+      <div
+        className={cn(
+          'absolute inset-y-0 left-0 flex w-64 flex-col transition-opacity duration-200 motion-reduce:transition-none',
+          railCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100',
+        )}
+        inert={railCollapsed}
+      >
       <div className="flex items-center gap-2.5 px-4 pt-4 pb-2">
         <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <ZapIcon className="size-4" />
@@ -235,6 +252,7 @@ export function Sidebar({
           })
         )}
       </nav>
+      </div>
     </aside>
   );
 }
