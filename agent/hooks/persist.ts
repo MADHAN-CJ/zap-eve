@@ -9,6 +9,7 @@ import {
   onSessionStarted,
   onSessionWaiting,
   onStepCompleted,
+  onSubagentCalled,
   onTurnEnded,
   onTurnStarted,
 } from '#lib/db/mirror.js';
@@ -73,6 +74,10 @@ export default defineHook({
         actions: readonly { kind: string; callId: string; toolName?: string; input?: unknown }[];
       };
       await guard('actions.requested', onActionsRequested(ctx.session.id, d));
+    },
+    async 'subagent.called'(event, ctx) {
+      const d = event.data as { turnId: string; callId: string; childSessionId: string };
+      await guard('subagent.called', onSubagentCalled(ctx.session.id, d));
     },
     async 'action.result'(event, ctx) {
       const d = event.data as Parameters<typeof onActionResult>[1];

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '@/agent/lib/db/client';
-import { threads } from '@/agent/lib/db/schema';
+import { sessionContext, threads } from '@/agent/lib/db/schema';
 import { upsertSessionContext } from '@/agent/lib/db/session-context';
 import { errorResponse, requireUser, type SessionUser } from '@/lib/server/auth';
 
@@ -181,9 +181,27 @@ export async function GET(req: Request, { params }: Params) {
     const user = await requireUser(req);
 
     // --- GET session/<id>/stream → NDJSON event stream (pass-through) ---
+    // Root sessions are authorized by their thread row; a SUBAGENT child
+    // session has no thread — it is authorized by the session_context row the
+    // persist hook copied from its root on subagent.called (read-only: child
+    // ids are never accepted for POST, so nothing can be sent into a child).
     if (path.length === 3 && path[0] === 'session' && SESSION_ID.test(path[1]) && path[2] === 'stream') {
-      const found = await ownedThread(user, path[1]);
-      if ('error' in found) return found.error;
+      const threadRow = await db().query.threads.findFirst({
+        columns: { id: true },
+        where: eq(threads.eveSessionId, path[1]),
+      });
+      if (threadRow) {
+        const found = await ownedThread(user, path[1]);
+        if ('error' in found) return found.error;
+      } else {
+        const ctxRow = await db().query.sessionContext.findFirst({
+          where: eq(sessionContext.eveSessionId, path[1]),
+        });
+        if (!ctxRow) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+        if (ctxRow.userId !== user.userId) {
+          return NextResponse.json({ error: 'This conversation belongs to a different account.' }, { status: 403 });
+        }
+      }
       const upstream = await fetch(upstreamUrl(req, path), {
         headers: upstreamHeaders({ accept: req.headers.get('accept') ?? 'application/x-ndjson' }),
         signal: req.signal,

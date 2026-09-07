@@ -22,9 +22,24 @@ export type ToolContextResult =
   | { status: 'ok'; ctx: DhanToolContext }
   | { status: 'unavailable'; message: string };
 
-/** Shape of the eve tool-execution context we rely on. */
+/**
+ * Shape of the eve tool-execution context we rely on. Subagent (child)
+ * sessions carry a `parent` with a direct `rootSessionId` pointer (shape
+ * verified live 2026-09-04 via scripts/bench-session-shape.ts) — ownership
+ * rows (session_context) exist only for ROOT sessions, so all lookups go
+ * through rootSessionId().
+ */
 export interface EveToolCtx {
-  session?: { id?: string };
+  session?: {
+    id?: string;
+    parent?: { rootSessionId?: string; sessionId?: string };
+  };
+}
+
+/** The root session id for this tool call (own id when not a subagent). */
+export function rootSessionId(toolCtx: EveToolCtx | undefined): string | undefined {
+  const s = toolCtx?.session;
+  return s?.parent?.rootSessionId ?? s?.parent?.sessionId ?? s?.id;
 }
 
 function envContext(): DhanToolContext | null {
@@ -54,7 +69,7 @@ const UNAVAILABLE = {
 } as const;
 
 export async function toolContext(toolCtx: EveToolCtx | undefined): Promise<ToolContextResult> {
-  const sessionId = toolCtx?.session?.id;
+  const sessionId = rootSessionId(toolCtx);
   if (!sessionId) {
     const env = envContext();
     return env

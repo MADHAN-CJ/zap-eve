@@ -20,6 +20,7 @@ import { extractSelectionChip } from "@/lib/chart-selection";
 import { ToolResultChart } from "@/components/charts/tool-result-chart";
 import { isWatchTriggerMessage } from "@/agent/lib/watch/trigger-format";
 import { ToolResultWatch } from "./watch-card";
+import { SubagentView } from "./subagent-view";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import {
   Tool,
@@ -44,11 +45,14 @@ export function AgentMessage({
   isStreaming,
   message,
   onInputResponses,
+  subagentSessions,
 }: {
   readonly canRespond: boolean;
   readonly isStreaming: boolean;
   readonly message: EveMessage;
   readonly onInputResponses: (responses: readonly AgentInputResponse[]) => void | Promise<void>;
+  /** Live map of delegation toolCallId → child session id (subagent.called). */
+  readonly subagentSessions?: ReadonlyMap<string, string>;
 }) {
   const lastTextIndex = message.parts.reduce(
     (last, part, index) => (part.type === "text" ? index : last),
@@ -90,6 +94,7 @@ export function AgentMessage({
               key={partKey(part, index)}
               messageStreaming={isStreaming}
               onInputResponses={onInputResponses}
+              subagentSessions={subagentSessions}
               part={
                 message.role === "user" && part.type === "text"
                   ? { ...part, text: extractSelectionChip(stripKickoff(part.text)).text }
@@ -104,18 +109,27 @@ export function AgentMessage({
   );
 }
 
+/** `eve:subagent:<name>` → a human label like "Options specialist". */
+export function subagentLabel(toolName: string): string | null {
+  if (!toolName.startsWith('eve:subagent:')) return null;
+  const name = toolName.slice('eve:subagent:'.length) || 'agent';
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} specialist`;
+}
+
 function AgentMessagePart({
   canRespond,
   messageStreaming,
   onInputResponses,
   part,
   showCaret,
+  subagentSessions,
 }: {
   readonly canRespond: boolean;
   readonly messageStreaming: boolean;
   readonly onInputResponses: (responses: readonly AgentInputResponse[]) => void | Promise<void>;
   readonly part: EveMessagePart;
   readonly showCaret: boolean;
+  readonly subagentSessions?: ReadonlyMap<string, string>;
 }) {
   switch (part.type) {
     case "step-start":
@@ -142,7 +156,9 @@ function AgentMessagePart({
       return <AttachmentPart part={part} />;
     case "authorization":
       return <AuthorizationPrompt part={part} />;
-    case "dynamic-tool":
+    case "dynamic-tool": {
+      const nestedLabel = subagentLabel(part.toolName);
+      const childSessionId = nestedLabel ? subagentSessions?.get(part.toolCallId) : undefined;
       return (
         <div className="flex flex-col gap-2">
           <Tool
@@ -150,7 +166,7 @@ function AgentMessagePart({
           >
             <ToolHeader
               state={part.state}
-              title={part.toolName}
+              title={nestedLabel ?? part.toolName}
               toolName={part.toolName}
               type="dynamic-tool"
             />
@@ -164,6 +180,9 @@ function AgentMessagePart({
               <ToolOutput errorText={part.errorText} output={part.output} />
             </ToolContent>
           </Tool>
+          {nestedLabel && childSessionId ? (
+            <SubagentView childSessionId={childSessionId} label={nestedLabel} />
+          ) : null}
           {part.state === "output-available" ? (
             <>
               <ToolResultChart output={part.output} toolName={part.toolName} />
@@ -172,6 +191,7 @@ function AgentMessagePart({
           ) : null}
         </div>
       );
+    }
   }
 }
 

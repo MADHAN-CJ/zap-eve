@@ -1,14 +1,16 @@
 import { z } from 'zod';
-import { dhan, type OptionChain } from './client';
+import { dhan } from './client';
 import type { DhanToolContext } from './context';
 import { chartInstrument, parseDerivative, resolveUnderlying } from './underlying';
 import { isDataApiSubscriptionError, type ToolSpec } from './shared';
 
 /**
- * The 11 read-only Dhan tools. Every `run` receives the resolved per-session
- * context (creds + the position this chat is about) — the model never passes
- * or sees credentials. Filenames in agent/tools/ must match `name` (eve tool
- * names come from filenames).
+ * The ROOT agent's read-only Dhan tools (position-scoped). Every `run`
+ * receives the resolved per-session context (creds + the position this chat
+ * is about) — the model never passes or sees credentials. Filenames in
+ * agent/tools/ must match `name` (eve tool names come from filenames).
+ * Option-chain/expiry tools live in options-specs.ts — the `options`
+ * subagent's surface (clean split, plan-options-subagent.md D2).
  */
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
@@ -56,55 +58,6 @@ function resolveTarget(ctx: DhanToolContext, target: 'position' | 'underlying') 
     exchangeSegment: res.underlying.seg,
     label: res.underlying.name,
   };
-}
-
-/** Trim a raw chain to ±N strikes around ATM and flatten — else it's a token bomb. */
-function trimChain(chain: OptionChain, around = 10) {
-  const strikes = Object.keys(chain.oc)
-    .map(Number)
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
-  const spot = chain.last_price;
-  let atmIdx = 0;
-  for (let i = 1; i < strikes.length; i++) {
-    if (Math.abs(strikes[i] - spot) < Math.abs(strikes[atmIdx] - spot)) atmIdx = i;
-  }
-  const lo = Math.max(0, atmIdx - around);
-  const hi = Math.min(strikes.length - 1, atmIdx + around);
-  const side = (s?: import('./client').OptionChainSide) =>
-    s && {
-      ltp: s.last_price,
-      iv: s.implied_volatility,
-      oi: s.oi,
-      oiPrev: s.previous_oi,
-      volume: s.volume,
-      bid: s.top_bid_price,
-      ask: s.top_ask_price,
-      delta: s.greeks?.delta,
-      theta: s.greeks?.theta,
-      gamma: s.greeks?.gamma,
-      vega: s.greeks?.vega,
-    };
-  return {
-    underlyingLastPrice: spot,
-    strikes: strikes.slice(lo, hi + 1).map((k) => {
-      const row = chain.oc[k.toFixed(6)] ?? chain.oc[String(k)] ?? {};
-      return { strike: k, ce: side(row.ce), pe: side(row.pe) };
-    }),
-  };
-}
-
-async function nearestExpiry(ctx: DhanToolContext): Promise<{ ok: true; expiry: string; scrip: number; seg: string } | { ok: false; error: string }> {
-  const res = resolveUnderlying(ctx.position);
-  if (!res.ok) return res;
-  const expiries = await dhan.getExpiryList(ctx.creds, {
-    UnderlyingScrip: res.underlying.scrip,
-    UnderlyingSeg: res.underlying.seg,
-  });
-  const today = ymd(new Date());
-  const next = expiries.filter((e) => e >= today).sort()[0] ?? expiries[0];
-  if (!next) return { ok: false, error: 'Dhan returned no expiries for this underlying.' };
-  return { ok: true, expiry: next, scrip: res.underlying.scrip, seg: res.underlying.seg };
 }
 
 export const allSpecs: ToolSpec[] = [
@@ -194,54 +147,6 @@ export const allSpecs: ToolSpec[] = [
         }
         throw e;
       }
-    },
-  },
-  {
-    name: 'get_expiry_list',
-    description:
-      'Available option expiries for the underlying of this derivative position (NIFTY/BANKNIFTY verified; others not yet supported).',
-    inputSchema: z.object({}),
-    run: async (_args, ctx) => {
-      const res = resolveUnderlying(ctx.position);
-      if (!res.ok) return { error: res.error };
-      const expiries = await dhan.getExpiryList(ctx.creds, {
-        UnderlyingScrip: res.underlying.scrip,
-        UnderlyingSeg: res.underlying.seg,
-      });
-      return { underlying: res.underlying.name, expiries };
-    },
-  },
-  {
-    name: 'get_option_chain',
-    description:
-      'Option chain for the underlying of this derivative position — per-strike LTP, IV, greeks, OI, bid/ask, trimmed to ±10 strikes around ATM. Omit `expiry` for the nearest one. Throttled to one call per 3 seconds; at most 2 calls per turn.',
-    inputSchema: z.object({
-      expiry: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .optional()
-        .describe('Expiry date YYYY-MM-DD (from get_expiry_list). Defaults to the nearest expiry.'),
-    }),
-    run: async (args, ctx) => {
-      let expiry = args.expiry as string | undefined;
-      let scrip: number;
-      let seg: string;
-      if (expiry) {
-        const res = resolveUnderlying(ctx.position);
-        if (!res.ok) return { error: res.error };
-        scrip = res.underlying.scrip;
-        seg = res.underlying.seg;
-      } else {
-        const n = await nearestExpiry(ctx);
-        if (!n.ok) return { error: n.error };
-        ({ expiry, scrip, seg } = n);
-      }
-      const chain = await dhan.getOptionChain(ctx.creds, {
-        UnderlyingScrip: scrip,
-        UnderlyingSeg: seg,
-        Expiry: expiry,
-      });
-      return { expiry, ...trimChain(chain) };
     },
   },
   {

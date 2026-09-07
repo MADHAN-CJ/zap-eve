@@ -8,7 +8,14 @@
 export type Role = 'user' | 'assistant';
 
 export type MessagePart =
-  | { type: 'tool_call'; toolCallId: string; toolName: string; input: unknown }
+  | {
+      type: 'tool_call';
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      /** Subagent delegations only: the child session id (nested-view replay). */
+      childSessionId?: string;
+    }
   | { type: 'tool_result'; toolCallId: string; toolName: string; output: unknown }
   | { type: 'tool_error'; toolCallId: string; toolName: string; error: string };
 
