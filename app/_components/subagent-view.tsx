@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useEveAgent } from 'eve/react';
 import { ChevronDownIcon, SparklesIcon } from 'lucide-react';
 import { authHeaders } from '@/lib/client/settings';
@@ -43,8 +43,26 @@ export function SubagentView({
   );
 }
 
+const MAX_ATTACH_ATTEMPTS = 5;
+
 /** Mounted only while open, so collapsed cards hold no stream. */
 function SubagentStream({ childSessionId }: { readonly childSessionId: string }) {
+  // The child's ownership row can lag its `subagent.called` event by a moment
+  // (hook write vs browser attach race) — remount the hook a few times with
+  // backoff instead of dying on the first 404.
+  const [attempt, setAttempt] = useState(0);
+  return <SubagentStreamAttempt attempt={attempt} childSessionId={childSessionId} key={attempt} onRetry={setAttempt} />;
+}
+
+function SubagentStreamAttempt({
+  attempt,
+  childSessionId,
+  onRetry,
+}: {
+  readonly attempt: number;
+  readonly childSessionId: string;
+  readonly onRetry: (next: number) => void;
+}) {
   const agent = useEveAgent({
     host: '/api',
     headers: () => authHeaders(),
@@ -55,10 +73,19 @@ function SubagentStream({ childSessionId }: { readonly childSessionId: string })
     },
   });
 
+  const failed = Boolean(agent.error);
+  useEffect(() => {
+    if (!failed || attempt >= MAX_ATTACH_ATTEMPTS) return;
+    const timer = setTimeout(() => onRetry(attempt + 1), 1500 * (attempt + 1));
+    return () => clearTimeout(timer);
+  }, [failed, attempt, onRetry]);
+
   if (agent.error) {
     return (
       <p className="px-3 pb-2.5 text-muted-foreground text-xs">
-        Couldn’t load the specialist’s working — its final answer above still stands.
+        {attempt < MAX_ATTACH_ATTEMPTS
+          ? 'Connecting to the specialist’s session…'
+          : 'Couldn’t load the specialist’s working — its final answer above still stands.'}
       </p>
     );
   }

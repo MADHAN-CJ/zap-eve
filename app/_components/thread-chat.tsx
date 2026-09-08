@@ -2,8 +2,8 @@
 
 import type { UserContent } from 'ai';
 import { useEffect, useMemo, useRef } from 'react';
-import { useEveAgent } from 'eve/react';
-import { AlertCircleIcon } from 'lucide-react';
+import { useEveAgent, type EveMessagePart } from 'eve/react';
+import { AlertCircleIcon, Loader2Icon } from 'lucide-react';
 import {
   Conversation,
   ConversationContent,
@@ -83,6 +83,15 @@ export function ThreadChat({
   const isBusy = agent.status === 'submitted' || agent.status === 'streaming';
   const isEmpty = history.length === 0 && agent.data.messages.length === 0;
   const turnUsage = usageByTurn(agent.events);
+
+  const visiblePart = (p: EveMessagePart) =>
+    (p.type === 'text' && p.text.trim().length > 0) ||
+    (p.type === 'reasoning' && (p.state === 'streaming' || Boolean(p.text?.trim()))) ||
+    p.type === 'dynamic-tool' ||
+    p.type === 'authorization';
+  const lastMessage = agent.data.messages[agent.data.messages.length - 1];
+  const showThinkingPlaceholder =
+    isBusy && !(lastMessage?.role === 'assistant' && lastMessage.parts.some(visiblePart));
 
   // Delegation toolCallId → child session id, from the control-plane events
   // (the nested SubagentView attaches to the child's stream through the proxy).
@@ -209,6 +218,12 @@ export function ThreadChat({
                 </div>
               );
             })}
+            {showThinkingPlaceholder ? (
+              <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                <Loader2Icon className="size-3.5 animate-spin" />
+                Thinking…
+              </div>
+            ) : null}
           </ConversationContent>
           <ConversationScrollButton />
         </Conversation>
