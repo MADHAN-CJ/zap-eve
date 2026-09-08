@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useEveAgent, type EveMessagePart } from 'eve/react';
+import { Client, defaultMessageReducer } from 'eve/client';
+import type { EveMessage } from 'eve/react';
 import { ChevronDownIcon, Loader2Icon, SparklesIcon } from 'lucide-react';
 import { authHeaders } from '@/lib/client/settings';
 import { cn } from '@/lib/utils';
@@ -10,12 +11,18 @@ import { AgentMessage } from './agent-message';
 /**
  * Live/replayed view of a delegated subagent's own session, nested under the
  * delegation card in the parent chat (plan-options-subagent.md P4 D1). Purely
- * read-only: it attaches to GET /api/eve/v1/session/<child>/stream (the proxy
- * authorizes child ids via the session_context row copied on subagent.called)
- * and renders the child's tool calls, charts and text with the same components
- * as the main chat. Child streams are durable — history replays from index 0.
- * Never sends: the child's own questions/approvals are proxied by eve to the
- * ROOT stream and answered there.
+ * read-only: it consumes GET /api/eve/v1/session/<child>/stream (the proxy
+ * authorizes child ids via the session_context row the stream tee copies on
+ * subagent.called) and renders the child's tool calls, charts and streaming
+ * text with the same components as the main chat.
+ *
+ * Implementation note: this reads the stream DIRECTLY via eve/client's
+ * `session.stream()` + `defaultMessageReducer` — NOT via useEveAgent, whose
+ * store only reads a stream inside send(); a send-less hook never attaches
+ * (found live: the panel sat on its placeholder forever). `stream()` has
+ * open-retries (12×250 ms, 404 included) and disconnect reconnects built in,
+ * and ends when the child session's stream closes — a completed child replays
+ * fully and then settles.
  */
 export function SubagentView({
   childSessionId,
@@ -43,13 +50,10 @@ export function SubagentView({
   );
 }
 
-const MAX_ATTACH_ATTEMPTS = 5;
+const MAX_ATTACH_ATTEMPTS = 3;
 
 /** Mounted only while open, so collapsed cards hold no stream. */
 function SubagentStream({ childSessionId }: { readonly childSessionId: string }) {
-  // The child's ownership row can lag its `subagent.called` event by a moment
-  // (hook write vs browser attach race) — remount the hook a few times with
-  // backoff instead of dying on the first 404.
   const [attempt, setAttempt] = useState(0);
   return <SubagentStreamAttempt attempt={attempt} childSessionId={childSessionId} key={attempt} onRetry={setAttempt} />;
 }
@@ -63,30 +67,49 @@ function SubagentStreamAttempt({
   readonly childSessionId: string;
   readonly onRetry: (next: number) => void;
 }) {
-  const agent = useEveAgent({
-    host: '/api',
-    headers: () => authHeaders(),
-    initialSession: {
-      sessionId: childSessionId,
-      continuationToken: 'proxy-managed', // read-only: nothing is ever sent
-      streamIndex: 0,
-    },
-  });
+  const [messages, setMessages] = useState<readonly EveMessage[]>([]);
+  const [live, setLive] = useState(true);
+  const [failed, setFailed] = useState(false);
 
-  const failed = Boolean(agent.error);
   useEffect(() => {
-    if (!failed || attempt >= MAX_ATTACH_ATTEMPTS) return;
-    const timer = setTimeout(() => onRetry(attempt + 1), 1500 * (attempt + 1));
-    return () => clearTimeout(timer);
-  }, [failed, attempt, onRetry]);
+    const controller = new AbortController();
+    let alive = true;
+    void (async () => {
+      try {
+        const client = new Client({
+          host: '/api',
+          headers: () => authHeaders(),
+          maxReconnectAttempts: 20,
+        });
+        const session = client.session({ sessionId: childSessionId, streamIndex: 0 });
+        const reducer = defaultMessageReducer();
+        let data = reducer.initial();
+        for await (const event of session.stream({ signal: controller.signal, startIndex: 0 })) {
+          if (!alive) return;
+          data = reducer.reduce(data, event);
+          setMessages((data as { messages: readonly EveMessage[] }).messages);
+        }
+        if (alive) setLive(false);
+      } catch (e) {
+        if (alive && !controller.signal.aborted) {
+          console.warn('[zap-eve] subagent stream failed:', e);
+          setFailed(true);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [childSessionId]);
 
-  if (agent.error) {
+  if (failed) {
     return (
       <p className="flex items-center gap-2 px-3 pb-2.5 text-muted-foreground text-xs">
         {attempt < MAX_ATTACH_ATTEMPTS ? (
           <>
             <Loader2Icon className="size-3 animate-spin" />
-            Connecting to the specialist’s session…
+            <RetryIn onRetry={() => onRetry(attempt + 1)} seconds={2 * (attempt + 1)} />
           </>
         ) : (
           'Couldn’t load the specialist’s working — its final answer above still stands.'
@@ -96,32 +119,40 @@ function SubagentStreamAttempt({
   }
 
   // Anything the specialist has visibly produced (tool card, streamed text,
-  // reasoning pill) — until then, keep a live working indicator. The child's
-  // answer text streams here token-by-token once it starts.
-  const visiblePart = (p: EveMessagePart) =>
-    (p.type === 'text' && p.text.trim().length > 0) ||
-    (p.type === 'reasoning' && (p.state === 'streaming' || Boolean(p.text?.trim()))) ||
-    p.type === 'dynamic-tool' ||
-    p.type === 'authorization';
-  const hasVisibleWork = agent.data.messages.some(
-    (m) => m.role === 'assistant' && m.parts.some(visiblePart),
+  // reasoning pill) — until then, keep a live working indicator.
+  const hasVisibleWork = messages.some(
+    (m) =>
+      m.role === 'assistant' &&
+      m.parts.some(
+        (p) =>
+          (p.type === 'text' && p.text.trim().length > 0) ||
+          (p.type === 'reasoning' && (p.state === 'streaming' || Boolean(p.text?.trim()))) ||
+          p.type === 'dynamic-tool' ||
+          p.type === 'authorization',
+      ),
   );
 
   return (
     <div className="subagent-nest flex flex-col gap-3 border-t border-dashed px-3 py-3">
       {hasVisibleWork ? null : (
         <p className="flex items-center gap-2 text-muted-foreground text-xs">
-          <Loader2Icon className="size-3 animate-spin" />
-          Specialist is working…
+          {live ? (
+            <>
+              <Loader2Icon className="size-3 animate-spin" />
+              Specialist is working…
+            </>
+          ) : (
+            'No specialist activity was recorded for this delegation.'
+          )}
         </p>
       )}
-      {agent.data.messages.map((message, index) =>
+      {messages.map((message, index) =>
         // The delegation `message` the parent packed is internal plumbing —
         // only show what the specialist did with it.
         message.role === 'user' ? null : (
           <AgentMessage
             canRespond={false}
-            isStreaming={agent.status === 'streaming' && index === agent.data.messages.length - 1}
+            isStreaming={live && index === messages.length - 1}
             key={message.id}
             message={message}
             onInputResponses={() => {
@@ -132,4 +163,13 @@ function SubagentStreamAttempt({
       )}
     </div>
   );
+}
+
+/** Small helper: waits, then triggers the retry (renders while counting). */
+function RetryIn({ onRetry, seconds }: { readonly onRetry: () => void; readonly seconds: number }) {
+  useEffect(() => {
+    const timer = setTimeout(onRetry, seconds * 1000);
+    return () => clearTimeout(timer);
+  }, [onRetry, seconds]);
+  return <span>Reconnecting to the specialist’s session…</span>;
 }

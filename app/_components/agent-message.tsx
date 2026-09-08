@@ -58,6 +58,13 @@ export function AgentMessage({
     (last, part, index) => (part.type === "text" ? index : last),
     -1,
   );
+  // The last non-step-start part: an EMPTY thinking pill (Sonnet 5 "omitted"
+  // display keeps state "streaming" forever) may only render while it's the
+  // tail — once a tool card or text follows, that step's thinking is over.
+  const lastContentIndex = message.parts.reduce(
+    (last, part, index) => (part.type === "step-start" ? last : index),
+    -1,
+  );
 
   return (
     <Message
@@ -91,6 +98,7 @@ export function AgentMessage({
           return (
             <AgentMessagePart
               canRespond={canRespond}
+              isTail={index === lastContentIndex}
               key={partKey(part, index)}
               messageStreaming={isStreaming}
               onInputResponses={onInputResponses}
@@ -118,6 +126,7 @@ export function subagentLabel(toolName: string): string | null {
 
 function AgentMessagePart({
   canRespond,
+  isTail,
   messageStreaming,
   onInputResponses,
   part,
@@ -125,6 +134,7 @@ function AgentMessagePart({
   subagentSessions,
 }: {
   readonly canRespond: boolean;
+  readonly isTail: boolean;
   readonly messageStreaming: boolean;
   readonly onInputResponses: (responses: readonly AgentInputResponse[]) => void | Promise<void>;
   readonly part: EveMessagePart;
@@ -142,8 +152,10 @@ function AgentMessagePart({
       );
     case "reasoning": {
       // Sonnet 5 streams thinking with empty text ("omitted" display), so the
-      // part's own state never leaves "streaming" — gate on the message too.
-      const streaming = part.state === "streaming" && messageStreaming;
+      // part's own state never leaves "streaming" — gate on the message still
+      // streaming AND this being the tail part, else every finished step's
+      // empty pill keeps shimmering ("two Thinking pills" bug).
+      const streaming = part.state === "streaming" && messageStreaming && isTail;
       if (!streaming && !part.text?.trim()) return null;
       return (
         <Reasoning defaultOpen isStreaming={streaming}>
@@ -350,10 +362,13 @@ function InputRequestActions({
   const selectedOption = inputRequest.options?.find(
     (option) => option.id === inputResponse?.optionId,
   );
+  // Models sometimes emit literal "\n" two-char sequences inside the prompt
+  // string — decode them, and render real newlines as line breaks.
+  const promptText = inputRequest.prompt.replace(/\\n/g, '\n');
 
   return (
     <div className="space-y-3 rounded-md border border-yellow-500/30 bg-yellow-500/5 p-3">
-      <p className="text-muted-foreground text-sm">{inputRequest.prompt}</p>
+      <p className="whitespace-pre-line text-muted-foreground text-sm">{promptText}</p>
       {inputResponse ? (
         <p className="font-medium text-sm">
           Responded: {selectedOption?.label ?? inputResponse.text ?? inputResponse.optionId}

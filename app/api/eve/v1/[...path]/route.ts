@@ -5,6 +5,7 @@ import { db } from '@/agent/lib/db/client';
 import { sessionContext, threads } from '@/agent/lib/db/schema';
 import { upsertSessionContext } from '@/agent/lib/db/session-context';
 import { errorResponse, requireUser, type SessionUser } from '@/lib/server/auth';
+import { teeSubagentCalls } from '@/lib/server/subagent-map';
 
 /**
  * App-owned proxy in front of eve's session routes. The browser points
@@ -214,7 +215,12 @@ export async function GET(req: Request, { params }: Params) {
         headers: upstreamHeaders({ accept: req.headers.get('accept') ?? 'application/x-ndjson' }),
         signal: req.signal,
       });
-      return new Response(upstream.body, {
+      // Tee `subagent.called` off the stream: eve 0.22.1 never dispatches it
+      // to hooks, so the proxy is the only server-side observer that can map
+      // child sessions (ownership row + history part stamp).
+      const body =
+        upstream.ok && upstream.body ? teeSubagentCalls(path[1], upstream.body) : upstream.body;
+      return new Response(body, {
         status: upstream.status,
         headers: {
           'content-type': upstream.headers.get('content-type') ?? 'application/x-ndjson; charset=utf-8',

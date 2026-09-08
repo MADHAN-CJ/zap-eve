@@ -71,6 +71,15 @@ export function ThreadChat({
     // The client appends /eve/v1/... itself → requests hit /api/eve/v1/*.
     host: '/api',
     headers: () => ({ ...authHeaders(), 'x-zap-position': JSON.stringify(position) }),
+    // A delegation turn can sit silent for a minute+; the default of 3
+    // reconnects can exhaust on transient drops (dev hot-reloads included)
+    // and then the turn stalls SILENTLY — card stuck "Running" forever.
+    maxReconnectAttempts: 20,
+    // Breadcrumbs for exactly that failure mode (visible in the console).
+    onEvent: (event) => console.debug('[zap-eve] event', (event as { type?: string }).type),
+    onError: (error) => console.warn('[zap-eve] stream error:', error),
+    onFinish: (snapshot) =>
+      console.debug('[zap-eve] turn settled; status =', (snapshot as { status?: string }).status),
     initialSession: session
       ? {
           sessionId: session.sessionId,
