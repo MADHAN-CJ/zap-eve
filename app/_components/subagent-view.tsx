@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useEveAgent } from 'eve/react';
-import { ChevronDownIcon, SparklesIcon } from 'lucide-react';
+import { useEveAgent, type EveMessagePart } from 'eve/react';
+import { ChevronDownIcon, Loader2Icon, SparklesIcon } from 'lucide-react';
 import { authHeaders } from '@/lib/client/settings';
 import { cn } from '@/lib/utils';
 import { AgentMessage } from './agent-message';
@@ -82,19 +82,39 @@ function SubagentStreamAttempt({
 
   if (agent.error) {
     return (
-      <p className="px-3 pb-2.5 text-muted-foreground text-xs">
-        {attempt < MAX_ATTACH_ATTEMPTS
-          ? 'Connecting to the specialist’s session…'
-          : 'Couldn’t load the specialist’s working — its final answer above still stands.'}
+      <p className="flex items-center gap-2 px-3 pb-2.5 text-muted-foreground text-xs">
+        {attempt < MAX_ATTACH_ATTEMPTS ? (
+          <>
+            <Loader2Icon className="size-3 animate-spin" />
+            Connecting to the specialist’s session…
+          </>
+        ) : (
+          'Couldn’t load the specialist’s working — its final answer above still stands.'
+        )}
       </p>
     );
   }
 
+  // Anything the specialist has visibly produced (tool card, streamed text,
+  // reasoning pill) — until then, keep a live working indicator. The child's
+  // answer text streams here token-by-token once it starts.
+  const visiblePart = (p: EveMessagePart) =>
+    (p.type === 'text' && p.text.trim().length > 0) ||
+    (p.type === 'reasoning' && (p.state === 'streaming' || Boolean(p.text?.trim()))) ||
+    p.type === 'dynamic-tool' ||
+    p.type === 'authorization';
+  const hasVisibleWork = agent.data.messages.some(
+    (m) => m.role === 'assistant' && m.parts.some(visiblePart),
+  );
+
   return (
     <div className="subagent-nest flex flex-col gap-3 border-t border-dashed px-3 py-3">
-      {agent.data.messages.length === 0 ? (
-        <p className="text-muted-foreground text-xs">Loading the specialist’s working…</p>
-      ) : null}
+      {hasVisibleWork ? null : (
+        <p className="flex items-center gap-2 text-muted-foreground text-xs">
+          <Loader2Icon className="size-3 animate-spin" />
+          Specialist is working…
+        </p>
+      )}
       {agent.data.messages.map((message, index) =>
         // The delegation `message` the parent packed is internal plumbing —
         // only show what the specialist did with it.
