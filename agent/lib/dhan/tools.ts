@@ -1,6 +1,7 @@
 import { defineTool } from 'eve/tools';
 import { dhan } from './client';
 import { allSpecs } from './specs';
+import { optionsSpecs } from './options-specs';
 import { toolContext, noteDhanAuthFailure, type DhanToolContext, type EveToolCtx } from './context';
 import { isDataApiSubscriptionError, isDhanAuthError, toErr, type ToolSpec } from './shared';
 
@@ -11,10 +12,18 @@ import { isDataApiSubscriptionError, isDhanAuthError, toErr, type ToolSpec } fro
  * marks the user's connection token_expired (drives the UI reconnect banner).
  */
 const byName = new Map(allSpecs.map((s) => [s.name, s]));
+const optionsByName = new Map(optionsSpecs.map((s) => [s.name, s]));
 
 export function dhanToolFor(name: string) {
   const spec = byName.get(name);
   if (!spec) throw new Error(`Unknown Dhan tool spec: ${name}`);
+  return buildTool(spec);
+}
+
+/** Tools for the `options` subagent (any-underlying option specs). */
+export function optionsToolFor(name: string) {
+  const spec = optionsByName.get(name);
+  if (!spec) throw new Error(`Unknown options tool spec: ${name}`);
   return buildTool(spec);
 }
 

@@ -1,7 +1,7 @@
 'use client';
 
 import type { UserContent } from 'ai';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useEveAgent } from 'eve/react';
 import { AlertCircleIcon } from 'lucide-react';
 import {
@@ -83,6 +83,18 @@ export function ThreadChat({
   const isBusy = agent.status === 'submitted' || agent.status === 'streaming';
   const isEmpty = history.length === 0 && agent.data.messages.length === 0;
   const turnUsage = usageByTurn(agent.events);
+
+  // Delegation toolCallId → child session id, from the control-plane events
+  // (the nested SubagentView attaches to the child's stream through the proxy).
+  const subagentSessions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const event of agent.events as ReadonlyArray<{ type?: string; data?: unknown }>) {
+      if (event.type !== 'subagent.called') continue;
+      const d = event.data as { callId?: string; childSessionId?: string } | undefined;
+      if (d?.callId && d.childSessionId) map.set(d.callId, d.childSessionId);
+    }
+    return map;
+  }, [agent.events]);
 
   // Conversation total = persisted turn costs + live turns estimated from usage.
   const storedCost = history.reduce((sum, m) => sum + (m.cost?.total ?? 0), 0);
@@ -189,6 +201,7 @@ export function ThreadChat({
                     }
                     message={message}
                     onInputResponses={(inputResponses) => agent.send({ inputResponses })}
+                    subagentSessions={subagentSessions}
                   />
                   {usage ? (
                     <p className="text-muted-foreground/70 text-xs">{formatUsageLine(usage)}</p>

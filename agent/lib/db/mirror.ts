@@ -248,25 +248,60 @@ export async function onMessageReceived(
   });
 }
 
+/** The live reducer names delegations `eve:subagent:<name>` — mirror that. */
+const subagentToolName = (name?: string) => `eve:subagent:${name ?? 'agent'}`;
+
 export async function onActionsRequested(
   sessionId: string,
   data: {
     turnId: string;
     sequence: number;
-    actions: readonly { kind: string; callId: string; toolName?: string; input?: unknown }[];
+    actions: readonly {
+      kind: string;
+      callId: string;
+      toolName?: string;
+      subagentName?: string;
+      input?: unknown;
+    }[];
   },
 ): Promise<void> {
-  const toolCalls = data.actions.filter((a) => a.kind === 'tool-call');
-  if (toolCalls.length === 0) return;
-  const parts: MessagePart[] = toolCalls.map((a) => ({
-    type: 'tool_call',
-    toolCallId: a.callId,
-    toolName: a.toolName ?? 'tool',
-    input: a.input,
-  }));
+  const parts: MessagePart[] = [];
+  for (const a of data.actions) {
+    if (a.kind === 'tool-call') {
+      parts.push({ type: 'tool_call', toolCallId: a.callId, toolName: a.toolName ?? 'tool', input: a.input });
+    } else if (a.kind === 'subagent-call') {
+      parts.push({ type: 'tool_call', toolCallId: a.callId, toolName: subagentToolName(a.subagentName), input: a.input });
+    }
+  }
+  if (parts.length === 0) return;
   const buf = buffers.get(bufferKey(sessionId, data.turnId));
   if (!buf) return appendDurable(sessionId, data.sequence, { parts });
   buf.parts.push(...parts);
+  await flushAssistant(buf);
+}
+
+/**
+ * subagent.called (root-stream control-plane event): stamp the delegation's
+ * tool_call part with the child session id so history can replay the nested
+ * view, and give the child session a session_context row copied from the root
+ * (the proxy's ownership check for reading the child's stream; the child's
+ * tools resolve creds via parent.rootSessionId regardless).
+ */
+export async function onSubagentCalled(
+  sessionId: string,
+  data: { turnId: string; callId: string; childSessionId: string },
+): Promise<void> {
+  await db().execute(sql`
+    insert into ${sessionContext}
+      (eve_session_id, user_id, security_id, exchange_segment, product_type, symbol)
+    select ${data.childSessionId}, user_id, security_id, exchange_segment, product_type, symbol
+      from ${sessionContext} where eve_session_id = ${sessionId}
+    on conflict (eve_session_id) do nothing`);
+  const buf = buffers.get(bufferKey(sessionId, data.turnId));
+  if (!buf) return; // restart while parked: nested replay lost for this turn (accepted)
+  const part = buf.parts.find((p) => p.type === 'tool_call' && p.toolCallId === data.callId);
+  if (!part || part.type !== 'tool_call') return;
+  part.childSessionId = data.childSessionId;
   await flushAssistant(buf);
 }
 
@@ -277,11 +312,12 @@ export async function onActionResult(
     sequence: number;
     status: 'completed' | 'failed' | 'rejected';
     error?: { code: string; message: string };
-    result: { kind: string; callId: string; toolName?: string; output?: unknown };
+    result: { kind: string; callId: string; toolName?: string; subagentName?: string; output?: unknown };
   },
 ): Promise<void> {
-  if (data.result.kind !== 'tool-result') return;
-  const toolName = data.result.toolName ?? 'tool';
+  const isSubagent = data.result.kind === 'subagent-result';
+  if (data.result.kind !== 'tool-result' && !isSubagent) return;
+  const toolName = isSubagent ? subagentToolName(data.result.subagentName) : (data.result.toolName ?? 'tool');
   const part: MessagePart =
     data.status === 'completed'
       ? { type: 'tool_result', toolCallId: data.result.callId, toolName, output: data.result.output }

@@ -56,6 +56,28 @@ export interface OptionChainSide {
   volume?: number;
   top_bid_price?: number;
   top_ask_price?: number;
+  // Dhan v2.5 (2026-02) additions:
+  /** The option contract's own securityId — chainable into charts/quotes. */
+  security_id?: number | string;
+  average_price?: number;
+  top_bid_quantity?: number;
+  top_ask_quantity?: number;
+  previous_close_price?: number;
+  previous_volume?: number;
+}
+
+/** One zipped bar from /charts/rollingoption (fields follow requiredData). */
+export interface ExpiredOptionBar {
+  timestamp: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  iv?: number;
+  oi?: number;
+  strike?: number;
+  spot?: number;
 }
 
 export interface OptionChain {
@@ -79,7 +101,22 @@ class Throttle {
   }
 }
 
-const optionChainThrottle = new Throttle(3100); // Dhan: 1 unique req / 3 s
+// Dhan v2.5: the 1-req/3s option-chain limit is per UNIQUE (underlying,
+// expiry) combination — distinct combos may go concurrently, repeats of the
+// same combo must wait. One Throttle per key (bounded; oldest pruned).
+const optionChainThrottles = new Map<string, Throttle>();
+function chainThrottle(key: string): Throttle {
+  let t = optionChainThrottles.get(key);
+  if (!t) {
+    if (optionChainThrottles.size >= 500) {
+      const oldest = optionChainThrottles.keys().next().value;
+      if (oldest !== undefined) optionChainThrottles.delete(oldest);
+    }
+    t = new Throttle(3100);
+    optionChainThrottles.set(key, t);
+  }
+  return t;
+}
 const quoteThrottle = new Throttle(1100); // marketfeed: 1 req / s
 const dataThrottle = new Throttle(250); // charts: 5/s bucket, be gentle
 
@@ -87,7 +124,7 @@ async function request<T>(
   creds: DhanCreds,
   op: string,
   path: string,
-  init?: { method?: 'GET' | 'POST'; body?: unknown },
+  init?: { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number },
 ): Promise<T> {
   let res: Response;
   try {
@@ -100,7 +137,7 @@ async function request<T>(
         'client-id': creds.dhanClientId,
       },
       body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(init?.timeoutMs ?? 15000),
     });
   } catch (e) {
     throw new DhanError(`Dhan ${op} failed: ${e instanceof Error ? e.message : 'network error'}`, 502);
@@ -181,7 +218,7 @@ export const dhan = {
     creds: DhanCreds,
     req: { UnderlyingScrip: number; UnderlyingSeg: string },
   ): Promise<string[]> {
-    await optionChainThrottle.acquire();
+    await chainThrottle(`${req.UnderlyingSeg}:${req.UnderlyingScrip}`).acquire();
     const d = unwrap<string[]>(
       await request(creds, 'getExpiryList', '/optionchain/expirylist', { method: 'POST', body: req }),
     );
@@ -192,12 +229,62 @@ export const dhan = {
     creds: DhanCreds,
     req: { UnderlyingScrip: number; UnderlyingSeg: string; Expiry: string },
   ): Promise<OptionChain> {
-    await optionChainThrottle.acquire();
+    await chainThrottle(`${req.UnderlyingSeg}:${req.UnderlyingScrip}:${req.Expiry}`).acquire();
     const d = unwrap<OptionChain>(
       await request(creds, 'getOptionChain', '/optionchain', { method: 'POST', body: req }),
     );
     if (!d?.oc) throw new DhanError('Dhan getOptionChain failed: no chain in response', 502);
     return { last_price: Number(d.last_price ?? 0), oc: d.oc };
+  },
+
+  /**
+   * Expired-options history (Dhan v2.3 "rolling option"): continuous data for
+   * expired contracts addressed by ATM±N strike notation — no per-contract
+   * securityIds needed. securityId here is the UNDERLYING's id (same value the
+   * option-chain APIs take). Docs allow ≤30 days/call but the endpoint is SLOW
+   * (11–18 s for a 2-day window, live 2026-09-04) and Dhan's gateway 504s at
+   * ~30 s — keep windows ≤~7 days and chunk longer ranges. expiryCode starts
+   * at 1 (1 = nearest expiry per expiryFlag, 2 = next…); 0 is rejected.
+   * Un-requested requiredData fields come back as EMPTY arrays.
+   */
+  async getExpiredOptionData(
+    creds: DhanCreds,
+    req: {
+      exchangeSegment: string;
+      securityId: string;
+      instrument: 'OPTIDX' | 'OPTSTK';
+      expiryCode: number;
+      expiryFlag: 'WEEK' | 'MONTH';
+      drvOptionType: 'CALL' | 'PUT';
+      strike: string; // 'ATM' | 'ATM+1'…'ATM+10' | 'ATM-1'…'ATM-10' (stocks: ±3)
+      interval: number; // 1 | 5 | 15 | 25 | 60
+      requiredData: string[]; // any of open/high/low/close/iv/volume/strike/oi/spot
+      fromDate: string; // YYYY-MM-DD
+      toDate: string; // YYYY-MM-DD (non-inclusive)
+    },
+  ): Promise<{ ce?: ExpiredOptionBar[]; pe?: ExpiredOptionBar[] }> {
+    await dataThrottle.acquire();
+    const d = unwrap<Record<string, Record<string, unknown[]>>>(
+      await request(creds, 'getExpiredOptionData', '/charts/rollingoption', {
+        method: 'POST',
+        body: req,
+        timeoutMs: 60000, // endpoint takes 11–18 s even for small windows
+      }),
+    );
+    const zipSide = (side?: Record<string, unknown[]>): ExpiredOptionBar[] | undefined => {
+      const ts = side?.timestamp;
+      if (!Array.isArray(ts)) return undefined;
+      const keys = Object.keys(side ?? {}).filter((k) => k !== 'timestamp');
+      return ts.map((t, i) => {
+        const bar: ExpiredOptionBar = { timestamp: Number(t) };
+        for (const k of keys) {
+          const v = Number(side?.[k]?.[i]);
+          if (Number.isFinite(v)) (bar as unknown as Record<string, number>)[k] = v;
+        }
+        return bar;
+      });
+    };
+    return { ce: zipSide(d?.ce), pe: zipSide(d?.pe) };
   },
 
   /** Batched last-traded prices: {SEGMENT: [securityId, …]} → {SEGMENT: {id: ltp}}. */

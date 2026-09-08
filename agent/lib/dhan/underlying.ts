@@ -1,26 +1,23 @@
 import type { PositionIdentity } from '../db/session-context';
+import { FNO_INDICES, FNO_STOCKS } from './fno-underlyings';
 
 /**
- * Underlying resolution for F&O positions. Only NIFTY=13 and BANKNIFTY=25
- * (IDX_I) are verified ids — other indices are deliberately unmapped, and
- * stock-derivative resolution needs the Dhan instrument master (not ingested
- * in v1): both return a clear error instead of a guessed id.
+ * Underlying resolution for F&O work. Ids come from the generated
+ * fno-underlyings.ts (scripts/gen-fno-underlyings.ts, Dhan scrip master):
+ * all 8 option-chain indices on IDX_I plus every NSE F&O stock underlying on
+ * NSE_EQ. Unknown names still return a clear error instead of a guessed id.
  */
 
-const INDEX_MAP: Record<string, { scrip: number; seg: 'IDX_I' }> = {
-  NIFTY: { scrip: 13, seg: 'IDX_I' },
-  BANKNIFTY: { scrip: 25, seg: 'IDX_I' },
+/** Trading-symbol spellings that differ from the index row's ticker. */
+const INDEX_ALIASES: Record<string, string> = {
+  SENSEX50: 'SNSX50', // BSE option symbols say SENSEX50; the index row is SNSX50
+  'NIFTY 50': 'NIFTY',
+  NIFTY50: 'NIFTY',
+  'NIFTY BANK': 'BANKNIFTY',
+  'NIFTY NEXT 50': 'NIFTYNXT50',
 };
 
-const KNOWN_INDEX_NAMES = new Set([
-  'NIFTY',
-  'BANKNIFTY',
-  'FINNIFTY',
-  'MIDCPNIFTY',
-  'NIFTYNXT50',
-  'SENSEX',
-  'BANKEX',
-]);
+const canonicalIndexName = (name: string) => INDEX_ALIASES[name] ?? name;
 
 export interface DerivativeInfo {
   isDerivative: boolean;
@@ -39,12 +36,19 @@ export function parseDerivative(position: PositionIdentity): DerivativeInfo {
   }
   const sym = position.symbol.toUpperCase();
   const isOption = /(?:^|[-\s])(CE|PE|CALL|PUT)(?:$|[-\s])/.test(sym);
-  const first = sym.split(/[-\s]/)[0] ?? null;
+  // First token, but hyphenated tickers (BAJAJ-AUTO, M&M-FIN style) span two
+  // tokens — prefer the longest leading join that names a known underlying.
+  const tokens = sym.split(/[-\s]/);
+  const twoToken = tokens.length > 1 ? `${tokens[0]}-${tokens[1]}` : null;
+  const first =
+    twoToken && (FNO_STOCKS[twoToken] !== undefined || FNO_INDICES[canonicalIndexName(twoToken)] !== undefined)
+      ? twoToken
+      : (tokens[0] ?? null);
   return {
     isDerivative: true,
     isOption,
     underlyingName: first,
-    isIndexUnderlying: first !== null && KNOWN_INDEX_NAMES.has(first),
+    isIndexUnderlying: first !== null && FNO_INDICES[canonicalIndexName(first)] !== undefined,
   };
 }
 
@@ -52,6 +56,25 @@ export interface Underlying {
   scrip: number;
   seg: string;
   name: string;
+}
+
+/** Look up any F&O underlying by name/ticker (index or NSE stock). */
+export function resolveUnderlyingBySymbol(
+  raw: string,
+): { ok: true; underlying: Underlying } | { ok: false; error: string } {
+  const name = raw.trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!name) return { ok: false, error: 'Empty underlying symbol.' };
+  const idx = canonicalIndexName(name);
+  if (FNO_INDICES[idx] !== undefined) {
+    return { ok: true, underlying: { scrip: FNO_INDICES[idx], seg: 'IDX_I', name: idx } };
+  }
+  if (FNO_STOCKS[name] !== undefined) {
+    return { ok: true, underlying: { scrip: FNO_STOCKS[name], seg: 'NSE_EQ', name } };
+  }
+  return {
+    ok: false,
+    error: `"${raw}" is not a known F&O underlying (checked ${Object.keys(FNO_INDICES).length} indices and ${Object.keys(FNO_STOCKS).length} NSE F&O stocks). Use the exchange ticker, e.g. NIFTY, BANKNIFTY, RELIANCE, BAJAJ-AUTO.`,
+  };
 }
 
 /** The Dhan option-chain underlying for a position, or a typed error message. */
@@ -68,17 +91,11 @@ export function resolveUnderlying(
   if (!info.underlyingName) {
     return { ok: false, error: `Could not parse the underlying from trading symbol "${position.symbol}".` };
   }
-  const mapped = INDEX_MAP[info.underlyingName];
-  if (mapped) return { ok: true, underlying: { scrip: mapped.scrip, seg: mapped.seg, name: info.underlyingName } };
-  if (info.isIndexUnderlying) {
-    return {
-      ok: false,
-      error: `Underlying index ${info.underlyingName} is not mapped yet (only NIFTY and BANKNIFTY are verified). Say so plainly rather than guessing.`,
-    };
-  }
+  const res = resolveUnderlyingBySymbol(info.underlyingName);
+  if (res.ok) return res;
   return {
     ok: false,
-    error: `Stock-derivative underlying resolution (${info.underlyingName}) is not supported yet in this version — only NIFTY/BANKNIFTY option chains are available.`,
+    error: `Underlying "${info.underlyingName}" (from trading symbol "${position.symbol}") is not in the F&O underlying master. Say so plainly rather than guessing.`,
   };
 }
 

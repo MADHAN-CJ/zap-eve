@@ -6,6 +6,8 @@ import { extractSelectionChip } from '@/lib/chart-selection';
 import { ToolResultChart } from '@/components/charts/tool-result-chart';
 import { isWatchTriggerMessage } from '@/agent/lib/watch/trigger-format';
 import { ToolResultWatch } from './watch-card';
+import { subagentLabel } from './agent-message';
+import { SubagentView } from './subagent-view';
 import {
   Tool,
   ToolContent,
@@ -31,6 +33,7 @@ interface PairedTool {
   input: unknown;
   output?: unknown;
   errorText?: string;
+  childSessionId?: string;
 }
 
 function pairToolParts(parts: MessagePart[]): PairedTool[] {
@@ -42,6 +45,7 @@ function pairToolParts(parts: MessagePart[]): PairedTool[] {
         toolCallId: part.toolCallId,
         toolName: part.toolName,
         input: part.input,
+        childSessionId: part.childSessionId,
       };
       byId.set(part.toolCallId, tool);
       ordered.push(tool);
@@ -91,28 +95,34 @@ export function HistoryMessage({ message }: { readonly message: ApiMessage }) {
     <div className="flex flex-col gap-1.5">
       <Message from="assistant">
         <MessageContent>
-          {tools.map((tool) => (
-            <div className="flex flex-col gap-2" key={tool.toolCallId}>
-              <Tool>
-                <ToolHeader
-                  state={tool.errorText ? 'output-error' : tool.output !== undefined ? 'output-available' : 'input-available'}
-                  title={tool.toolName}
-                  toolName={tool.toolName}
-                  type="dynamic-tool"
-                />
-                <ToolContent>
-                  <ToolInput input={tool.input} />
-                  <ToolOutput errorText={tool.errorText} output={tool.output} />
-                </ToolContent>
-              </Tool>
-              {tool.output !== undefined && !tool.errorText ? (
-                <>
-                  <ToolResultChart output={tool.output} toolName={tool.toolName} />
-                  <ToolResultWatch output={tool.output} toolName={tool.toolName} />
-                </>
-              ) : null}
-            </div>
-          ))}
+          {tools.map((tool) => {
+            const nestedLabel = subagentLabel(tool.toolName);
+            return (
+              <div className="flex flex-col gap-2" key={tool.toolCallId}>
+                <Tool>
+                  <ToolHeader
+                    state={tool.errorText ? 'output-error' : tool.output !== undefined ? 'output-available' : 'input-available'}
+                    title={nestedLabel ?? tool.toolName}
+                    toolName={tool.toolName}
+                    type="dynamic-tool"
+                  />
+                  <ToolContent>
+                    <ToolInput input={tool.input} />
+                    <ToolOutput errorText={tool.errorText} output={tool.output} />
+                  </ToolContent>
+                </Tool>
+                {nestedLabel && tool.childSessionId ? (
+                  <SubagentView childSessionId={tool.childSessionId} label={nestedLabel} />
+                ) : null}
+                {tool.output !== undefined && !tool.errorText ? (
+                  <>
+                    <ToolResultChart output={tool.output} toolName={tool.toolName} />
+                    <ToolResultWatch output={tool.output} toolName={tool.toolName} />
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
           {message.content ? <MessageResponse>{message.content}</MessageResponse> : null}
         </MessageContent>
       </Message>

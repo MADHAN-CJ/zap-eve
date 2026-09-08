@@ -15,7 +15,8 @@
     "start:eve": "eve start",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:smoke": "tsx scripts/db-smoke.ts"
+    "db:smoke": "tsx scripts/db-smoke.ts",
+    "gen:underlyings": "tsx scripts/gen-fno-underlyings.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.10",

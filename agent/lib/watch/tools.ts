@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { defineTool } from 'eve/tools';
 import { getSessionContext, type SessionOwner } from '../db/session-context';
-import type { EveToolCtx } from '../dhan/context';
+import { rootSessionId, type EveToolCtx } from '../dhan/context';
 import {
   AI_CHECK_DEFAULT_MINUTES,
   AI_CHECK_MAX_MINUTES,
@@ -51,7 +51,9 @@ const conditionSchema = z.object({
 const INTERVALS = ['1min', '5min', '15min', '1h', '1day'] as const;
 
 async function ownerFor(toolCtx: EveToolCtx | undefined): Promise<SessionOwner | { error: string }> {
-  const sessionId = toolCtx?.session?.id;
+  // Ownership rows exist only for ROOT sessions; a subagent's watch must also
+  // bind to the root session so a fire continues the user's thread.
+  const sessionId = rootSessionId(toolCtx);
   if (!sessionId) return { error: 'Watches need the app context — this session has no owner to alert.' };
   const found = await getSessionContext(sessionId);
   if (found.status === 'found') return found.owner;
@@ -105,7 +107,7 @@ export const createWatchTool = defineTool({
     if (a.kind === 'levels' && (!a.conditions || a.conditions.length === 0)) {
       return { error: 'kind=levels requires at least one condition. If the ask truly has no numeric proxy, use kind=ai_check.' };
     }
-    const sessionId = toolCtx?.session?.id as string;
+    const sessionId = rootSessionId(toolCtx) as string;
     const result = await createWatch({
       userId: owner.userId,
       eveSessionId: sessionId,

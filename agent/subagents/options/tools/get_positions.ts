@@ -1,3 +1,3 @@
 import { dhanToolFor } from "#lib/dhan/tools.js";
 
-export default dhanToolFor("get_expiry_list");
+export default dhanToolFor("get_positions");
