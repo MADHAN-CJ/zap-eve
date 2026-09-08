@@ -194,9 +194,17 @@ export async function GET(req: Request, { params }: Params) {
         const found = await ownedThread(user, path[1]);
         if ('error' in found) return found.error;
       } else {
-        const ctxRow = await db().query.sessionContext.findFirst({
-          where: eq(sessionContext.eveSessionId, path[1]),
-        });
+        // The child's context row is copied by the persist hook on
+        // subagent.called, which the browser's attach can beat by a moment
+        // (observed live: 404 at +300ms on Vercel) — poll briefly before 404ing.
+        let ctxRow = null;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          ctxRow = await db().query.sessionContext.findFirst({
+            where: eq(sessionContext.eveSessionId, path[1]),
+          });
+          if (ctxRow) break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
         if (!ctxRow) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
         if (ctxRow.userId !== user.userId) {
           return NextResponse.json({ error: 'This conversation belongs to a different account.' }, { status: 403 });
