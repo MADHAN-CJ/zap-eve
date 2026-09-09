@@ -5,6 +5,7 @@ import { Client, defaultMessageReducer } from 'eve/client';
 import type { EveMessage } from 'eve/react';
 import { ChevronDownIcon, Loader2Icon, SparklesIcon } from 'lucide-react';
 import { authHeaders } from '@/lib/client/settings';
+import { formatUsageLine, type TurnUsage } from '@/lib/usage';
 import { cn } from '@/lib/utils';
 import { AgentMessage } from './agent-message';
 
@@ -27,9 +28,13 @@ import { AgentMessage } from './agent-message';
 export function SubagentView({
   childSessionId,
   label = 'Options specialist',
+  onUsage,
 }: {
   readonly childSessionId: string;
   readonly label?: string;
+  /** Replace-semantics report of the child's summed usage so far (only ever
+   * grows within one replay; each report carries FULL totals, never deltas). */
+  readonly onUsage?: (usage: TurnUsage) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -45,7 +50,7 @@ export function SubagentView({
         <span className="opacity-60">— delegated session</span>
         <ChevronDownIcon className={cn('ml-auto size-3.5 transition-transform', open ? '' : '-rotate-90')} />
       </button>
-      {open ? <SubagentStream childSessionId={childSessionId} /> : null}
+      {open ? <SubagentStream childSessionId={childSessionId} onUsage={onUsage} /> : null}
     </div>
   );
 }
@@ -53,21 +58,38 @@ export function SubagentView({
 const MAX_ATTACH_ATTEMPTS = 3;
 
 /** Mounted only while open, so collapsed cards hold no stream. */
-function SubagentStream({ childSessionId }: { readonly childSessionId: string }) {
+function SubagentStream({
+  childSessionId,
+  onUsage,
+}: {
+  readonly childSessionId: string;
+  readonly onUsage?: (usage: TurnUsage) => void;
+}) {
   const [attempt, setAttempt] = useState(0);
-  return <SubagentStreamAttempt attempt={attempt} childSessionId={childSessionId} key={attempt} onRetry={setAttempt} />;
+  return (
+    <SubagentStreamAttempt
+      attempt={attempt}
+      childSessionId={childSessionId}
+      key={attempt}
+      onRetry={setAttempt}
+      onUsage={onUsage}
+    />
+  );
 }
 
 function SubagentStreamAttempt({
   attempt,
   childSessionId,
   onRetry,
+  onUsage,
 }: {
   readonly attempt: number;
   readonly childSessionId: string;
   readonly onRetry: (next: number) => void;
+  readonly onUsage?: (usage: TurnUsage) => void;
 }) {
   const [messages, setMessages] = useState<readonly EveMessage[]>([]);
+  const [usage, setUsage] = useState<TurnUsage | null>(null);
   const [live, setLive] = useState(true);
   const [failed, setFailed] = useState(false);
 
@@ -84,10 +106,26 @@ function SubagentStreamAttempt({
         const session = client.session({ sessionId: childSessionId, streamIndex: 0 });
         const reducer = defaultMessageReducer();
         let data = reducer.initial();
+        // Exact provider-reported usage, summed from the child's own
+        // step.completed events (a fresh replay restarts the sum from zero).
+        const totals: TurnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, steps: 0 };
         for await (const event of session.stream({ signal: controller.signal, startIndex: 0 })) {
           if (!alive) return;
           data = reducer.reduce(data, event);
           setMessages((data as { messages: readonly EveMessage[] }).messages);
+          const ev = event as {
+            type?: string;
+            data?: { usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number } };
+          };
+          if (ev.type === 'step.completed') {
+            totals.inputTokens += ev.data?.usage?.inputTokens ?? 0;
+            totals.outputTokens += ev.data?.usage?.outputTokens ?? 0;
+            totals.cacheReadTokens += ev.data?.usage?.cacheReadTokens ?? 0;
+            totals.cacheWriteTokens += ev.data?.usage?.cacheWriteTokens ?? 0;
+            totals.steps += 1;
+            setUsage({ ...totals });
+            onUsage?.({ ...totals });
+          }
         }
         if (alive) setLive(false);
       } catch (e) {
@@ -101,6 +139,9 @@ function SubagentStreamAttempt({
       alive = false;
       controller.abort();
     };
+    // onUsage is deliberately not a dependency: parents pass inline lambdas
+    // and re-running this effect would tear down the live stream every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [childSessionId]);
 
   if (failed) {
@@ -161,6 +202,9 @@ function SubagentStreamAttempt({
           />
         ),
       )}
+      {usage && usage.steps > 0 ? (
+        <p className="text-muted-foreground/70 text-xs">Specialist · {formatUsageLine(usage)}</p>
+      ) : null}
     </div>
   );
 }

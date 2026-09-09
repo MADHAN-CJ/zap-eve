@@ -12,8 +12,10 @@ export interface TurnUsage {
   steps: number;
 }
 
-// $/MTok — claude-sonnet-5 (cache read 0.1x, cache write 1.25x)
-const PRICE = { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 };
+// $/MTok — claude-sonnet-5 (cache read 0.1x, cache write 1.25x).
+// $2/$10 verified 2026-09-08 against platform.claude.com (base price; the
+// old $3/$15 here was the pre-launch figure). Keep in sync w/ db/pricing.ts.
+const PRICE = { input: 2.0, output: 10.0, cacheRead: 0.2, cacheWrite: 2.5 };
 
 export function estCostUsd(u: TurnUsage): number {
   // inputTokens is AI-SDK-style: inclusive of cache read/write (guard for the

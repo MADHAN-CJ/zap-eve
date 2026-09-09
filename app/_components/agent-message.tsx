@@ -19,6 +19,7 @@ import { stripKickoff } from "@/lib/kickoff";
 import { extractSelectionChip } from "@/lib/chart-selection";
 import { ToolResultChart } from "@/components/charts/tool-result-chart";
 import { isWatchTriggerMessage } from "@/agent/lib/watch/trigger-format";
+import type { TurnUsage } from "@/lib/usage";
 import { ToolResultWatch } from "./watch-card";
 import { SubagentView } from "./subagent-view";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
@@ -45,6 +46,7 @@ export function AgentMessage({
   isStreaming,
   message,
   onInputResponses,
+  onSubagentUsage,
   subagentSessions,
 }: {
   readonly canRespond: boolean;
@@ -53,6 +55,10 @@ export function AgentMessage({
   readonly onInputResponses: (responses: readonly AgentInputResponse[]) => void | Promise<void>;
   /** Live map of delegation toolCallId → child session id (subagent.called). */
   readonly subagentSessions?: ReadonlyMap<string, string>;
+  /** LIVE delegations only: the nested view reports the child's summed usage
+   * here (full totals, replace semantics). History replay must NOT pass this —
+   * persisted child cost is already folded into the stored conversation total. */
+  readonly onSubagentUsage?: (childSessionId: string, usage: TurnUsage) => void;
 }) {
   const lastTextIndex = message.parts.reduce(
     (last, part, index) => (part.type === "text" ? index : last),
@@ -102,6 +108,7 @@ export function AgentMessage({
               key={partKey(part, index)}
               messageStreaming={isStreaming}
               onInputResponses={onInputResponses}
+              onSubagentUsage={onSubagentUsage}
               subagentSessions={subagentSessions}
               part={
                 message.role === "user" && part.type === "text"
@@ -129,6 +136,7 @@ function AgentMessagePart({
   isTail,
   messageStreaming,
   onInputResponses,
+  onSubagentUsage,
   part,
   showCaret,
   subagentSessions,
@@ -137,6 +145,7 @@ function AgentMessagePart({
   readonly isTail: boolean;
   readonly messageStreaming: boolean;
   readonly onInputResponses: (responses: readonly AgentInputResponse[]) => void | Promise<void>;
+  readonly onSubagentUsage?: (childSessionId: string, usage: TurnUsage) => void;
   readonly part: EveMessagePart;
   readonly showCaret: boolean;
   readonly subagentSessions?: ReadonlyMap<string, string>;
@@ -193,7 +202,13 @@ function AgentMessagePart({
             </ToolContent>
           </Tool>
           {nestedLabel && childSessionId ? (
-            <SubagentView childSessionId={childSessionId} label={nestedLabel} />
+            <SubagentView
+              childSessionId={childSessionId}
+              label={nestedLabel}
+              onUsage={
+                onSubagentUsage ? (usage) => onSubagentUsage(childSessionId, usage) : undefined
+              }
+            />
           ) : null}
           {part.state === "output-available" ? (
             <>

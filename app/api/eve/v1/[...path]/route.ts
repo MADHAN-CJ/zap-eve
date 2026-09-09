@@ -219,7 +219,9 @@ export async function GET(req: Request, { params }: Params) {
       // to hooks, so the proxy is the only server-side observer that can map
       // child sessions (ownership row + history part stamp).
       const body =
-        upstream.ok && upstream.body ? teeSubagentCalls(path[1], upstream.body) : upstream.body;
+        upstream.ok && upstream.body
+          ? teeSubagentCalls(path[1], upstream.body, upstreamUrl(req, path).origin)
+          : upstream.body;
       return new Response(body, {
         status: upstream.status,
         headers: {

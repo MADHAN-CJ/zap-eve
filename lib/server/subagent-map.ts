@@ -1,6 +1,8 @@
 import { eq, sql } from 'drizzle-orm';
 import { db } from '@/agent/lib/db/client';
 import { messages, sessionContext, threads } from '@/agent/lib/db/schema';
+import { costForUsage } from '@/agent/lib/db/pricing';
+import type { Cost, Usage } from '@/agent/lib/db/types';
 
 /**
  * Child-session bookkeeping for subagent delegations, driven by the PROXY
@@ -43,12 +45,80 @@ function copyChildContext(rootSessionId: string, childSessionId: string): void {
     });
 }
 
-async function stampOnce(threadId: string, callId: string, childSessionId: string): Promise<boolean> {
+/**
+ * Sum the child session's provider-reported usage from its COMPLETED stream
+ * (read directly from the eve upstream with the proxy secret). Returns null on
+ * ANY failure or truncation — a partial sum must never be shown as a cost, so
+ * the number is all-or-nothing: it only counts if the stream ended at a
+ * session boundary.
+ */
+async function fetchChildUsage(upstreamOrigin: string, childSessionId: string): Promise<Usage | null> {
+  try {
+    const secret = process.env.EVE_PROXY_SECRET;
+    const res = await fetch(`${upstreamOrigin}/eve/v1/session/${childSessionId}/stream?startIndex=0`, {
+      headers: secret ? { 'x-eve-proxy-secret': secret } : {},
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok || !res.body) return null;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let steps = 0;
+    let complete = false;
+    const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    try {
+      read: for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line) as {
+            type?: string;
+            data?: { usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number } };
+          };
+          if (ev.type === 'step.completed') {
+            steps += 1;
+            total.inputTokens += ev.data?.usage?.inputTokens ?? 0;
+            total.outputTokens += ev.data?.usage?.outputTokens ?? 0;
+            total.cacheReadTokens += ev.data?.usage?.cacheReadTokens ?? 0;
+            total.cacheWriteTokens += ev.data?.usage?.cacheWriteTokens ?? 0;
+          } else if (ev.type === 'session.completed' || ev.type === 'session.failed' || ev.type === 'session.waiting') {
+            complete = true;
+            break read;
+          }
+        }
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+    if (!complete || steps === 0) return null;
+    return { ...total, totalTokens: total.inputTokens + total.outputTokens };
+  } catch (e) {
+    console.error('[subagent-map] child usage fetch failed:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+async function stampOnce(
+  threadId: string,
+  callId: string,
+  childSessionId: string,
+  childUsage: Usage | null,
+  childCost: Cost | null,
+): Promise<boolean> {
+  const extra =
+    childUsage && childCost
+      ? sql`|| jsonb_build_object('childUsage', ${JSON.stringify(childUsage)}::jsonb, 'childCost', ${JSON.stringify(childCost)}::jsonb)`
+      : sql``;
   const res = await db().execute(sql`
     update ${messages} set parts = (
       select coalesce(jsonb_agg(
         case when t.p->>'type' = 'tool_call' and t.p->>'toolCallId' = ${callId}
-          then t.p || jsonb_build_object('childSessionId', ${childSessionId}::text)
+          then t.p || jsonb_build_object('childSessionId', ${childSessionId}::text) ${extra}
           else t.p end), '[]'::jsonb)
       from jsonb_array_elements(${messages.parts}) as t(p))
     where ${messages.threadId} = ${threadId}
@@ -66,9 +136,18 @@ async function isStamped(threadId: string, callId: string, childSessionId: strin
 }
 
 /** Stamp after the turn settles; verify and re-stamp if a late flush erased it. */
-function stampWhenStable(rootSessionId: string, callId: string, childSessionId: string): void {
+function stampWhenStable(
+  rootSessionId: string,
+  callId: string,
+  childSessionId: string,
+  upstreamOrigin: string,
+): void {
   void (async () => {
     try {
+      // The child session is complete by the parent's turn boundary — read its
+      // exact summed usage once (null on any failure: absent beats wrong).
+      const childUsage = await fetchChildUsage(upstreamOrigin, childSessionId);
+      const childCost = childUsage ? costForUsage(childUsage) : null;
       for (let round = 0; round < 8; round++) {
         await new Promise((r) => setTimeout(r, 1500));
         const thread = await db().query.threads.findFirst({
@@ -77,7 +156,7 @@ function stampWhenStable(rootSessionId: string, callId: string, childSessionId: 
         });
         if (!thread) continue;
         if (await isStamped(thread.id, callId, childSessionId)) return;
-        await stampOnce(thread.id, callId, childSessionId);
+        await stampOnce(thread.id, callId, childSessionId, childUsage, childCost);
       }
     } catch (e) {
       console.error('[subagent-map] part stamp failed:', e instanceof Error ? e.message : e);
@@ -86,13 +165,17 @@ function stampWhenStable(rootSessionId: string, callId: string, childSessionId: 
 }
 
 /** NDJSON tee: passes bytes through untouched, observes subagent + boundary events. */
-export function teeSubagentCalls(rootSessionId: string, upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+export function teeSubagentCalls(
+  rootSessionId: string,
+  upstream: ReadableStream<Uint8Array>,
+  upstreamOrigin: string,
+): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   let buf = '';
   /** Delegations seen this connection whose part stamp is still pending. */
   const pending: { callId: string; childSessionId: string }[] = [];
   const flushPending = () => {
-    for (const p of pending.splice(0)) stampWhenStable(rootSessionId, p.callId, p.childSessionId);
+    for (const p of pending.splice(0)) stampWhenStable(rootSessionId, p.callId, p.childSessionId, upstreamOrigin);
   };
   const scan = (chunk: Uint8Array) => {
     buf += decoder.decode(chunk, { stream: true });

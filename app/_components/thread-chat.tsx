@@ -1,7 +1,7 @@
 'use client';
 
 import type { UserContent } from 'ai';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEveAgent, type EveMessagePart } from 'eve/react';
 import { AlertCircleIcon, Loader2Icon } from 'lucide-react';
 import {
@@ -16,7 +16,7 @@ import {
   PromptInputTextarea,
 } from '@/components/ai-elements/prompt-input';
 import { cn } from '@/lib/utils';
-import { formatCost, formatUsageLine, totalCostUsd, usageByTurn } from '@/lib/usage';
+import { estCostUsd, formatCost, formatUsageLine, totalCostUsd, usageByTurn, type TurnUsage } from '@/lib/usage';
 import { authHeaders } from '@/lib/client/settings';
 import type { ApiMessage } from '@/lib/client/threads-api';
 import { AgentMessage } from './agent-message';
@@ -115,8 +115,27 @@ export function ThreadChat({
   }, [agent.events]);
 
   // Conversation total = persisted turn costs + live turns estimated from usage.
-  const storedCost = history.reduce((sum, m) => sum + (m.cost?.total ?? 0), 0);
-  const conversationCost = storedCost + totalCostUsd(turnUsage);
+  // LIVE delegations report their child session's exact summed usage here
+  // (full totals per report — replace, never add). History replay does NOT
+  // report: persisted child cost rides the stored parts below instead, so a
+  // child session is never counted twice.
+  const [liveChildUsage, setLiveChildUsage] = useState<ReadonlyMap<string, TurnUsage>>(new Map());
+  const onSubagentUsage = useCallback((childSessionId: string, usage: TurnUsage) => {
+    setLiveChildUsage((prev) => new Map(prev).set(childSessionId, usage));
+  }, []);
+  let liveChildCost = 0;
+  for (const usage of liveChildUsage.values()) liveChildCost += estCostUsd(usage);
+
+  // Stored cost = each persisted turn's own cost + any persisted child-session
+  // cost stamped onto its delegation parts (server-computed, exact-or-absent).
+  const storedCost = history.reduce((sum, m) => {
+    let s = sum + (m.cost?.total ?? 0);
+    for (const part of m.parts ?? []) {
+      if (part.type === 'tool_call' && part.childCost?.total) s += part.childCost.total;
+    }
+    return s;
+  }, 0);
+  const conversationCost = storedCost + totalCostUsd(turnUsage) + liveChildCost;
 
   // Notify the workspace exactly once when a draft becomes a real session.
   const announcedSession = useRef(false);
@@ -219,6 +238,7 @@ export function ThreadChat({
                     }
                     message={message}
                     onInputResponses={(inputResponses) => agent.send({ inputResponses })}
+                    onSubagentUsage={onSubagentUsage}
                     subagentSessions={subagentSessions}
                   />
                   {usage ? (

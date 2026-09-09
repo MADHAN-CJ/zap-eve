@@ -15,6 +15,12 @@ export type MessagePart =
       input: unknown;
       /** Subagent delegations only: the child session id (nested-view replay). */
       childSessionId?: string;
+      /** Subagent delegations only: the child session's summed model usage,
+       * read from its completed stream — absent when it couldn't be read in
+       * full (never partial). */
+      childUsage?: Usage;
+      /** Cost computed server-side from childUsage (absent with it). */
+      childCost?: Cost;
     }
   | { type: 'tool_result'; toolCallId: string; toolName: string; output: unknown }
   | { type: 'tool_error'; toolCallId: string; toolName: string; error: string };

@@ -9,8 +9,11 @@ import type { Cost, Usage } from './types';
 
 const MODEL_ID = 'claude-sonnet-5';
 
-// $/MTok — claude-sonnet-5 list rates (cache read 0.1x, cache write 1.25x)
-const PRICE = { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 };
+// $/MTok — claude-sonnet-5 list rates (cache read 0.1x, cache write 1.25x).
+// $2/$10 verified 2026-09-08 against platform.claude.com (base price; the
+// old $3/$15 here was the pre-launch figure). Forward-only: rows persisted
+// before this date keep the cost computed at the old rate.
+const PRICE = { input: 2.0, output: 10.0, cacheRead: 0.2, cacheWrite: 2.5 };
 
 /**
  * Build the persisted Cost object from a turn's summed usage. Returns null when
