@@ -16,3 +16,8 @@ backend/
 frontend/
 docs/
 scripts/
+
+# Python (mcp/)
+__pycache__/
+*.pyc
+.venv/
