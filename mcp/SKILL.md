@@ -9,26 +9,103 @@ You have exactly one tool: **`run_python(code)`**. It executes your Python on a
 server that already holds the user's Dhan credentials and returns whatever the
 script printed.
 
-There are no per-endpoint tools. Fetch, compute, and print a conclusion in one
-script rather than pulling raw data back and reasoning over it here.
+## Model the question as a function
 
-## How to use it well
+The user's question is a function specification. Write that function, run it
+once, print the answer. Before writing anything, ask: *what would a single
+function that answers this whole question look like?* Then write that function —
+including every decision you would otherwise make by reading intermediate
+output.
 
-- **Print small.** A NIFTY option chain is hundreds of rows; 180 daily candles
-  is thousands of numbers. Do the aggregation in Python and print the handful of
-  numbers you actually need. Output over ~100k characters is elided from the
-  middle.
-- **One script, many calls.** Chained work (resolve → chain → per-strike candles)
-  belongs in a single script. Every tool round trip costs far more than a loop.
-- **Errors come back as text.** A traceback is a normal result, not a failure —
+**The anti-pattern** — using this tool as a remote procedure call:
+
+```python
+pp(option_chain("NIFTY"))            # call 1: 500 rows come back, you read
+                                     # them and work out the ATM strike...
+pp(option_candles(47297, "NIFTY"))   # call 2: ...then read 50 more rows
+```
+
+Three round trips, thousands of tokens of chain and candle data sitting in your
+context, and the user asked for one sentence.
+
+**Composed** — same question, one call, the data never leaves the sandbox:
+
+```python
+def answer():
+    ch = option_chain("NIFTY", strikes_around=3)
+    spot = ch["underlyingLastPrice"]
+    atm = min(ch["strikes"], key=lambda r: abs(r["strike"] - spot))
+    bars = option_candles(atm["ce"]["securityId"], "NIFTY", interval=15, days_back=1)
+    if not bars:
+        return f"{atm['strike']:.0f} CE: no bars today (holiday or pre-open)"
+    first, last = bars[0]["close"], bars[-1]["close"]
+    oi_chg = bars[-1].get("openInterest", 0) - bars[0].get("openInterest", 0)
+    return (f"{atm['strike']:.0f} CE ({ch['expiry']}): {first} -> {last} "
+            f"({(last / first - 1) * 100:+.1f}%), OI {oi_chg:+,.0f}, spot {spot}")
+
+print(answer())
+```
+
+```
+23350 CE (2026-09-15): 194.15 -> 108.0 (-44.4%), OI +9,224,215, spot 23344.7
+```
+
+Writing it as `def answer():` is a useful habit: it makes early returns
+available for the empty and error branches, and it forces the question to have
+one shape.
+
+### Decisions go in the script
+
+Every urge to "fetch it, look at it, then decide" is one line of code:
+
+| The urge | The code |
+| --- | --- |
+| fetch the chain to find ATM | `min(rows, key=lambda r: abs(r["strike"] - spot))` |
+| fetch the expiry list to pick one | `nearest_expiry("NIFTY")`, or `expiry_list("NIFTY")[1]` |
+| read positions to find the worst | `min(pos, key=lambda p: float(p.get("unrealizedProfit") or 0))` |
+| see which strikes matter | `sorted(rows, key=lambda r: -(r["ce"] or {}).get("oi", 0))[:3]` |
+| check there is data before using it | `if not rows: return "nothing open"` |
+
+A dependent lookup is not a reason to split a script. The sandbox reads its own
+intermediate values for free; you do not.
+
+### Be defensive, not exploratory
+
+You cannot see the data before you write the code, so handle what might be there
+rather than making a trip to find out: `try/except DhanError` around the fetch,
+`.get(key)` over `[key]` for anything optional, an explicit branch for the empty
+case. A script that covers the empty account, the closed position and the
+missing data subscription inline is one call; a script that discovers them is
+three.
+
+Loop over instruments inside the script rather than asking about them one at a
+time — the whole portfolio in one pass costs the same round trip as one row.
+
+### Print the answer, not the working
+
+Print the conclusion and the few numbers supporting it. Chains, candles and
+intermediate arrays stay in the sandbox. If you are about to `pp()` a whole
+fetch, that value belongs in a calculation instead. Output over ~100k characters
+is elided from the middle.
+
+### When a second call is justified
+
+A traceback you need to fix, or a genuine follow-up question from the user. Not
+"now let me fetch the next thing."
+
+## Mechanics
+
+- Errors come back as text. A traceback is a normal result, not a tool failure —
   read it and send a corrected script.
-- **Everything is read-only.** There is no order placement, modification, or
-  cancellation. If asked to trade, say plainly that this tool only reads.
-- **A trailing bare expression is echoed** (REPL-style), so a script can end in
+- A trailing bare expression is echoed REPL-style, so a script can end in
   `summary` instead of `print(summary)`.
-- Only the standard library is guaranteed. `json`, `math`, `statistics`,
-  `datetime`, `timedelta`, `date` are already in the namespace. No pandas/numpy.
-- `print(help_api())` lists every available function with its first doc line.
+- Only the standard library. `json`, `math`, `statistics`, `datetime`,
+  `timedelta`, `date` are already in the namespace. No pandas, no numpy.
+- Scripts are interrupted after ~120 s. Rate limits are enforced by sleeping
+  inside the functions, so a loop over many option chains can hit that ceiling.
+- `print(help_api())` lists every function with its first doc line.
+- Everything is read-only — no order placement, modification, or cancellation.
+  If asked to trade, say plainly that this tool only reads.
 
 ## Instruments: ids, segments, instrument types
 
@@ -169,7 +246,10 @@ read endpoint directly.
 
 ## Worked examples
 
-**Portfolio P&L, one call:**
+Each is one call: a question in, an answer out. Note what is *absent* from every
+one of them — no intermediate `pp()` of a fetch, no "let me check X first".
+
+**"How am I doing today?"**
 
 ```python
 pos = positions()
@@ -182,7 +262,7 @@ for p in sorted(open_pos, key=lambda p: -abs(float(p.get("unrealizedProfit") or 
 print(f"cash: {funds().get('availabelBalance'):,.0f}")
 ```
 
-**Trend read on an index — print levels, not candles:**
+**"Where is NIFTY trading relative to its recent range?"**
 
 ```python
 u = resolve_underlying("NIFTY")
@@ -194,7 +274,7 @@ hi = max(x["high"] for x in d[-60:]); lo = min(x["low"] for x in d[-60:])
 print(f"60d range {lo:,.0f}-{hi:,.0f}, {(c[-1]-lo)/(hi-lo)*100:.0f}% of range")
 ```
 
-**Max pain and PCR from one chain call:**
+**"What are the option writers positioned for this expiry?"**
 
 ```python
 ch = option_chain("NIFTY", strikes_around=20)
@@ -215,7 +295,7 @@ top_pe = sorted(rows, key=lambda r: -((r["pe"] or {}).get("oi") or 0))[:3]
 print("CE OI walls:", [r["strike"] for r in top_ce], "| PE OI walls:", [r["strike"] for r in top_pe])
 ```
 
-**Drill into one strike (chain → contract securityId → candles):**
+**"How did the ATM call behave today?"** — three dependent fetches, still one call:
 
 ```python
 ch = option_chain("BANKNIFTY", strikes_around=1)
@@ -227,7 +307,7 @@ for b in bars[-6:]:
     print(f"  {to_ist(b['timestamp']):%d %H:%M}  close {b['close']:>8.2f}  oi {b.get('openInterest',0):>10,.0f}")
 ```
 
-**Handle the unsubscribed-account case gracefully:**
+**"What are my holdings worth?"** — written so it survives a missing data subscription:
 
 ```python
 try:
