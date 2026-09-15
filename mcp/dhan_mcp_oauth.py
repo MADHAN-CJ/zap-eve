@@ -718,15 +718,35 @@ def build_server():
         if t is None or not t.get("email"):
             return HTMLResponse(_err("Login session expired — go back to Claude and connect again."), status_code=400)
         try:
-            user_id, _ = await anyio.to_thread.run_sync(verify_otp, t["email"], code)
+            user_id, norm_email = await anyio.to_thread.run_sync(verify_otp, t["email"], code)
             redirect = provider.finish_login(txn_id, user_id)
         except IdentityError as e:
             return HTMLResponse(_otp_page(txn_id, t["email"], _err(str(e))), status_code=400)
-        return RedirectResponse(redirect, status_code=302)
+        resp = RedirectResponse(redirect, status_code=302)
+        # Completing the connector login also signs this browser in to the
+        # watchers page (guarded — connector login is unaffected if disabled).
+        try:
+            import watchers as _watchers
+
+            _watchers.attach_cookie(resp, user_id, norm_email)
+        except Exception:
+            pass
+        return resp
 
     @mcp_server.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"ok": True, "server": "zap-eve-mcp", "auth": "oauth"})
+
+    # Watchers (docs/plan-mcp-watchers.md). Guarded: any failure here — missing
+    # module, missing WATCHERS_* secrets — disables the feature and leaves the
+    # server serving exactly the surface above.
+    try:
+        import watchers as _watchers
+
+        _watchers.register(mcp_server, sys.modules[__name__])
+        log.info("watchers module enabled")
+    except Exception as e:
+        log.error("watchers module disabled: %s", e)
 
     return mcp_server
 
