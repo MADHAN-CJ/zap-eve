@@ -572,8 +572,9 @@ def run_script_as(code: str, dhan_client_id: str, access_token: str) -> str:
         "DHAN_MCP_EXEC_TIMEOUT": os.environ.get("DHAN_MCP_EXEC_TIMEOUT", "120"),
         "DHAN_MCP_MAX_OUTPUT": os.environ.get("DHAN_MCP_MAX_OUTPUT", "100000"),
     }
-    if os.environ.get("DHAN_BASE_URL"):
-        child_env["DHAN_BASE_URL"] = os.environ["DHAN_BASE_URL"]
+    for k in ("DHAN_BASE_URL", "DHAN_MCP_CACHE_DIR", "DHAN_MCP_SCRIP_MASTER_URL", "DHAN_MCP_TODAY"):
+        if os.environ.get(k):  # scrip-master cache location / test hooks — no secrets
+            child_env[k] = os.environ[k]
     timeout = float(child_env["DHAN_MCP_EXEC_TIMEOUT"]) + 20  # child interrupts itself first
     try:
         proc = subprocess.run(

@@ -110,29 +110,49 @@ A traceback you need to fix, or a genuine follow-up question from the user. Not
 ## Instruments: ids, segments, instrument types
 
 Dhan addresses instruments by **`securityId` + `exchangeSegment`**, never by
-ticker. Segments: `NSE_EQ`, `BSE_EQ`, `IDX_I` (indices), `NSE_FNO`, `BSE_FNO`,
-`MCX_COMM`, `NSE_CURRENCY`.
+ticker. Segments Dhan serves: `NSE_EQ`, `BSE_EQ` (stocks, ETFs), `IDX_I`
+(indices, data only), `NSE_FNO`, `BSE_FNO` (index + stock F&O), `MCX_COMM`
+(commodity futures/options: GOLD, SILVER, CRUDEOIL, NATURALGAS, COPPER, ZINC…).
+Currency derivatives are **not** available on Dhan (no live contracts) — say so.
+Hours: NSE/BSE 09:15–15:30 IST, MCX 09:00–23:30 IST; `market_status()` reports both.
 
-`resolve_underlying(ticker)` maps an F&O underlying's ticker to its id — 8
-indices (`NIFTY`, `BANKNIFTY`, `FINNIFTY`, `MIDCPNIFTY`, `NIFTYNXT50`, `SENSEX`,
-`BANKEX`, `SNSX50`) plus 210 NSE F&O stocks:
+**`resolve_symbol(ticker)`** — one ticker → the instrument to quote/chart, from
+the cached scrip master (downloaded daily, ~1 s to build):
 
 ```python
-resolve_underlying("NIFTY")      # {'scrip': 13, 'seg': 'IDX_I', 'name': 'NIFTY'}
-resolve_underlying("RELIANCE")   # {'scrip': 2885, 'seg': 'NSE_EQ', 'name': 'RELIANCE'}
+resolve_symbol("TCS")    # {'security_id': '11536', 'exchange_segment': 'NSE_EQ', 'kind': 'equity', ...}
+resolve_symbol("NIFTY")  # {'security_id': '13', 'exchange_segment': 'IDX_I', 'kind': 'index', ...}
+resolve_symbol("GOLD")   # nearest live MCX future: {'security_id': '483079', 'exchange_segment': 'MCX_COMM',
+                         #   'kind': 'commodity_future', 'expiry_date': '2026-10-05', ...}
+resolve_symbol("SILVER", kind="equity")        # the Silver ETF instead of the future
+resolve_symbol("RELIANCE", exchange_segment="BSE_EQ")
 ```
 
-It raises `ValueError` on an unknown name rather than guessing — say so plainly
-instead of inventing an id. `list_underlyings("stock")` enumerates them.
+Ranking: index > listed share (NSE, then BSE) > commodity future > index/stock
+future > ETF/bond. Returns `None` for unknown names — never invent an id.
+`search_instruments(query, exchange_segment=, instrument=)` is the substring
+fallback (expired contracts hidden unless `include_expired=True`).
 
-For **anything outside that F&O universe** (a non-F&O stock, a specific option
-or futures contract), you need the id from elsewhere: the user's own
-`positions()`/`holdings()` rows carry `securityId`, `exchangeSegment` and
-`tradingSymbol`, and `option_chain()` rows carry each contract's `securityId`.
+**`resolve_underlying(ticker)`** — an option underlying → what the chain APIs
+need. NSE indices and NSE F&O stocks come from the built-in table (unchanged:
+`{'scrip': 13, 'seg': 'IDX_I', 'name': 'NIFTY'}`); MCX commodities, BSE stock
+options and BSE/MCX indices come from the scrip master and carry extra keys
+(`contract_segment`, `contract_instrument`, `exchange`, `kind`, `nearest_expiry`):
 
-Chart calls also need an `instrument` enum; `guess_instrument(segment, symbol)`
-derives it (`EQUITY`, `INDEX`, `OPTIDX`, `OPTSTK`, `FUTIDX`, `FUTSTK`) and is
-applied automatically when you omit it.
+```python
+resolve_underlying("GOLD")                    # scrip 114 on MCX_COMM, contracts OPTFUT
+resolve_underlying("RELIANCE", exchange="BSE")  # BSE scrip 500325, contracts on BSE_FNO
+```
+
+`expiry_list`, `option_chain`, `option_candles`, `expired_options` and
+`find_option_contracts(underlying, expiry_date=, option_type=, strike_price=)`
+all accept the same names. `option_candles(contract_id)` no longer needs the
+underlying — the contract is looked up in the master.
+
+Chart calls need an `instrument` enum (`EQUITY`, `INDEX`, `OPTIDX`, `OPTSTK`,
+`FUTIDX`, `FUTSTK`, `FUTCOM`, `OPTFUT`); it is derived automatically from the
+symbol or the master when you omit it, and `oi` now defaults to **on for every
+derivative** (including MCX) and off for EQUITY/INDEX.
 
 ## Account reads
 
@@ -177,12 +197,12 @@ quote({"IDX_I": [13]})
 #                             lastTradeTime}}}   (volume is cumulative for the day)
 
 intraday_candles(security_id, exchange_segment, instrument=None, interval=15,
-                 days_back=5, *, symbol=None, from_date=None, to_date=None, oi=False)
+                 days_back=5, *, symbol=None, from_date=None, to_date=None, oi=None)
 # interval is minutes: 1, 5, 15, 25 or 60. Up to 90 days back.
-# oi=True adds openInterest (F&O only).
+# oi defaults to True for derivatives (NSE/BSE F&O, MCX), False for EQUITY/INDEX.
 
 daily_candles(security_id, exchange_segment, instrument=None, days_back=90,
-              *, symbol=None, from_date=None, to_date=None, oi=False, expiry_code=None)
+              *, symbol=None, from_date=None, to_date=None, oi=None, expiry_code=None)
 ```
 
 Both return a list of rows:
@@ -206,12 +226,12 @@ option_chain(underlying, expiry=None, strikes_around=10)
 # RATE LIMIT: 1 call per (underlying, expiry) per 3 s, enforced by sleeping.
 # Don't loop over many expiries in one script — it will crawl and may time out.
 
-option_candles(contract_security_id, underlying, interval=15, days_back=5)
+option_candles(contract_security_id, underlying=None, interval=15, days_back=5)
 # Intraday OHLCV + OI for ONE contract, using a securityId from an option_chain
 # row. `underlying` only supplies the exchange (NSE_FNO vs BSE_FNO) and type.
 
 expired_options(underlying, option_type, from_date, to_date, *, strike="ATM",
-                expiry_flag="WEEK", expiry_code=1, interval=60,
+                expiry_flag=None, expiry_code=1, interval=60,   # None → WEEK for indices, MONTH for stocks/commodities
                 fields=("close","iv","oi","strike","spot"))
 # History of EXPIRED contracts, addressed as ATM±N rather than by securityId,
 # rolling across past expiries — for "how did IV behave into last expiry".

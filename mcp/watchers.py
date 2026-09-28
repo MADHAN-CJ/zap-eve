@@ -104,13 +104,49 @@ def _secret(name: str) -> str:
     return v
 
 
-def is_nse_open(now: datetime | None = None) -> bool:
-    """NSE cash market hours: 09:15–15:30 IST, Monday–Friday."""
+MARKET_HOURS = {  # IST, Mon–Fri; exchange holidays not modelled
+    "NSE": (9 * 60 + 15, 15 * 60 + 30),   # NSE/BSE cash, F&O, indices
+    "MCX": (9 * 60, 23 * 60 + 30),        # MCX commodities (till 23:55 in US winter months)
+}
+MARKETS = tuple(MARKET_HOURS)
+
+
+def _hours_text(market: str) -> str:
+    start, end = MARKET_HOURS[market]
+    return f"{start // 60:02d}:{start % 60:02d}–{end // 60:02d}:{end % 60:02d}"
+
+
+def is_market_open(market: str, now: datetime | None = None) -> bool:
+    """Whether `market` (NSE|MCX) is in session at `now`."""
     t = (now or datetime.now(timezone.utc)).astimezone(IST)
     if t.weekday() > 4:
         return False
-    minutes = t.hour * 60 + t.minute
-    return 9 * 60 + 15 <= minutes <= 15 * 60 + 30
+    start, end = MARKET_HOURS.get(market.upper(), MARKET_HOURS["NSE"])
+    return start <= t.hour * 60 + t.minute <= end
+
+
+def is_nse_open(now: datetime | None = None) -> bool:
+    """NSE cash market hours: 09:15–15:30 IST, Monday–Friday."""
+    return is_market_open("NSE", now)
+
+
+def infer_market(script: str, market: str | None = None) -> str:
+    """Explicit NSE|MCX wins; otherwise MCX if the script touches MCX_COMM, else NSE."""
+    m = (market or "").strip().upper()
+    if m in MARKET_HOURS:
+        return m
+    if m and m != "AUTO":
+        raise ValueError(f"market must be one of {', '.join(MARKETS)} (or auto).")
+    return "MCX" if "MCX_COMM" in (script or "").upper() else "NSE"
+
+
+def script_gap_s() -> float:
+    """Minimum spacing between consecutive watcher script runs in one sweep tick — each
+    script is its own process, so Dhan's 1 req/s marketfeed bucket is not shared."""
+    try:
+        return float(os.environ.get("WATCHERS_SCRIPT_GAP_S", "1.2"))
+    except ValueError:
+        return 1.2
 
 # ---------------------------------------------------------------------------
 # Store (sqlite, WAL)
@@ -124,6 +160,15 @@ def _db_path() -> str:
 
 
 _local = threading.local()
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    cols = {r[1] for r in con.execute("PRAGMA table_info(watchers)")}
+    if cols and "market" not in cols:
+        con.execute("ALTER TABLE watchers ADD COLUMN market TEXT NOT NULL DEFAULT 'NSE'")
+        # Backfill rows created before the column existed with the same rule create_watcher infers by.
+        con.execute("UPDATE watchers SET market = 'MCX' WHERE upper(script) LIKE '%MCX_COMM%'")
+        con.commit()
 
 
 def _sql() -> sqlite3.Connection:
@@ -153,6 +198,7 @@ def _sql() -> sqlite3.Connection:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS fires_watcher ON fires (watcher_id)")
         conn.commit()
+        _migrate(conn)
         _local.conn = conn
     return conn
 
@@ -337,9 +383,11 @@ def sweep(force: bool = False, min_gap_override: int | None = None) -> dict[str,
     /internal/watch-sweep; `force` skips the market-hours gate (tests /
     off-hours smoke), and min_gap_override is honored only with force."""
     now = _now()
+    open_markets = {m for m in MARKETS if is_market_open(m)}
     report: dict[str, Any] = {
         "ranAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "marketOpen": is_nse_open(),
+        "marketOpen": bool(open_markets),
+        "marketsOpen": sorted(open_markets),
         "expired": 0,
         "checked": 0,
         "fired": 0,
@@ -379,6 +427,8 @@ def sweep(force: bool = False, min_gap_override: int | None = None) -> dict[str,
     ).fetchall()
     by_user: dict[str, list[sqlite3.Row]] = {}
     for r in due:
+        if not force and (r["market"] or "NSE") not in open_markets:
+            continue  # that watcher's market is closed right now (e.g. NSE watcher during the MCX evening)
         by_user.setdefault(r["user_id"], []).append(r)
 
     for user_id, rows in by_user.items():
@@ -396,6 +446,18 @@ def _error_user_watchers(user_id: str, message: str, report: dict[str, Any]) -> 
         _update(r["id"], status="ERROR", status_reason=message)
     report["erroredWatchers"] += len(rows)
     return rows
+
+
+_last_script_run = 0.0
+
+
+def _space_scripts() -> None:
+    """Sleep so consecutive watcher scripts (separate processes) stay under Dhan's 1 req/s marketfeed bucket."""
+    global _last_script_run
+    wait = _last_script_run + script_gap_s() - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    _last_script_run = time.monotonic()
 
 
 def _sweep_user(
@@ -428,6 +490,7 @@ def _sweep_user(
         if row["last_fired_at"] and now - row["last_fired_at"] < gap_s:
             report["deferred"] += 1
             continue
+        _space_scripts()
         out = H.run_script_as(row["script"], creds["dhanClientId"], creds["accessToken"])
         if "806" in out or "not subscribed" in out.lower():
             _update(row["id"], status="ERROR", status_reason=DATA_API_MESSAGE, last_checked_at=now)
@@ -498,6 +561,7 @@ _SHELL = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="robots" content="noindex"><title>Watchers — Zap</title>
 <style>
   :root {{ color-scheme: light dark; }}
+  .muted {{ opacity: .6; font-size: .9em; }}
   body {{ font: 15px/1.5 system-ui, sans-serif; max-width: 44rem;
          margin: 6vh auto; padding: 0 16px; }}
   h1 {{ font-size: 1.15rem; }}
@@ -566,7 +630,8 @@ def _watcher_card(row: sqlite3.Row, fires: list[sqlite3.Row]) -> str:
     )
     return (
         '<div class="card"><div class="row">'
-        f"<div><b>{html.escape(row['symbol'])}</b> · {html.escape(row['label'])}</div>"
+        f"<div><b>{html.escape(row['symbol'])}</b> · {html.escape(row['label'])}"
+        + (" <span class=muted>· MCX hours</span>" if (row['market'] or 'NSE') == 'MCX' else "") + "</div>"
         f'<span class="chip c-{status}">{status}</span></div>'
         f'<div class="meta">{" · ".join(bits)} · every {row["check_every_s"] // 60} min · expires {_fmt_ts(row["expires_at"])}</div>'
         f"{reason}"
@@ -594,7 +659,7 @@ def _render_list(session: dict[str, str]) -> str:
 
     body = (
         f"<h1>Your watchers</h1><p class='meta'>Signed in as {html.escape(session['email'])}. "
-        "Watchers check the market during NSE hours and email you when their condition becomes true. "
+        "Watchers check the market during trading hours (NSE/BSE 09:15–15:30, MCX 09:00–23:30 IST) and email you when their condition becomes true. "
         "Create new ones by asking Claude.</p>"
     )
     body += cards(active) if active else "<p class='meta'>No active watchers — ask Claude to create one.</p>"
@@ -640,15 +705,18 @@ def _err_box(msg: str) -> str:
 
 CREATE_DESCRIPTION = """\
 Create a market watcher: a background check that runs a Python script on a
-schedule during NSE market hours (09:15–15:30 IST, Mon–Fri) with the user's
-Dhan data, and EMAILS the user when its condition BECOMES true. Use this when
+schedule during that market's hours (NSE/BSE 09:15–15:30 IST; MCX commodities
+09:00–23:30 IST; Mon–Fri) with the user's Dhan data, and EMAILS the user when
+its condition BECOMES true. `market` is auto-detected (MCX when the script
+uses MCX_COMM, else NSE) — pass "MCX" or "NSE" to override. Use this when
 the user asks to be alerted / notified / watched about a market condition
 (price level, indicator cross, OI change, …).
 
 `script` runs in the same sandbox as run_python (same preloaded functions:
-ltp_of, quote, intraday_candles, ema/rsi/macd, option_chain, …) once every
-`check_every_minutes`, so KEEP IT CHEAP — one or two API calls, no loops over
-option chains. Its LAST printed line MUST be exactly one JSON object:
+ltp_of, quote, intraday_candles, ema/rsi/macd, option_chain, resolve_symbol,
+…) once every `check_every_minutes`, so KEEP IT CHEAP — one or two API calls,
+no loops over option chains. Resolve ids ONCE now (resolve_symbol("GOLD") →
+security_id on MCX_COMM) and hard-code them in the script. Its LAST printed line MUST be exactly one JSON object:
     {"met": <bool>, "value": <current number, optional>, "detail": "<short note, optional>"}
 Print nothing after that line. The script is validated with one immediate
 dry-run; if the output violates the contract, creation is rejected and the
@@ -695,6 +763,7 @@ def register(server: Any, host: Any) -> None:
         script: str,
         check_every_minutes: int = 1,
         expires_in_days: int = 30,
+        market: str = "auto",
     ) -> str:
         subject = _auth_subject()
         if subject is None:
@@ -707,6 +776,10 @@ def register(server: Any, host: Any) -> None:
             return f"check_every_minutes must be between {INTERVAL_MIN} and {INTERVAL_MAX}."
         if not (EXPIRY_MIN_D <= expires_in_days <= EXPIRY_MAX_D):
             return f"expires_in_days must be between {EXPIRY_MIN_D} and {EXPIRY_MAX_D}."
+        try:
+            mkt = infer_market(script, market)
+        except ValueError as e:
+            return str(e)
 
         creds = await anyio.to_thread.run_sync(H.get_active_broker_creds, subject)
         if creds["status"] == "none":
@@ -737,13 +810,13 @@ def register(server: Any, host: Any) -> None:
         _sql().execute(
             "INSERT INTO watchers (id, user_id, email, symbol, label, script, check_every_s, status,"
             " baseline_done, latched, last_met, last_value, last_detail, last_checked_at,"
-            " expires_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, 'ARMED', 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " expires_at, created_at, updated_at, market)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 'ARMED', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 wid, subject, email or "", symbol, label, script, check_every_minutes * 60,
                 int(res["met"]), int(res["met"]),
                 None if res["value"] is None else str(res["value"]), res["detail"],
-                now, now + expires_in_days * 86400, now, now,
+                now, now + expires_in_days * 86400, now, now, mkt,
             ),
         )
         _sql().commit()
@@ -754,6 +827,8 @@ def register(server: Any, host: Any) -> None:
                 "symbol": symbol,
                 "label": label,
                 "checkEveryMinutes": check_every_minutes,
+                "market": mkt,
+                "hours": f"{mkt} {_hours_text(mkt)} IST, Mon–Fri",
                 "expiresAt": datetime.fromtimestamp(now + expires_in_days * 86400, IST).strftime("%Y-%m-%d"),
                 "dryRun": {"met": res["met"], "value": res["value"], "detail": res["detail"]},
                 "alreadyMet": res["met"],
@@ -788,6 +863,7 @@ def register(server: Any, host: Any) -> None:
                         "label": r["label"],
                         "status": r["status"],
                         "statusReason": r["status_reason"],
+                        "market": r["market"] or "NSE",
                         "checkEveryMinutes": r["check_every_s"] // 60,
                         "lastCheckedAt": _fmt_ts(r["last_checked_at"]),
                         "lastValue": r["last_value"],

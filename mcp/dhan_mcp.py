@@ -44,6 +44,12 @@ from typing import Any, Iterable, Literal, Sequence
 
 import httpx
 
+try:  # instrument master (scrip-master cache): MCX / BSE / any-index resolution
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import instruments as _master
+except Exception:  # pragma: no cover - keeps the hardcoded universe working alone
+    _master = None
+
 DEFAULT_BASE_URL = "https://api.dhan.co/v2"
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -123,6 +129,21 @@ INDEX_ALIASES: dict[str, str] = {
 
 # BSE-listed index underlyings — their option contracts trade on BSE_FNO.
 BSE_INDEX_NAMES = {"SENSEX", "BANKEX", "SNSX50"}
+# MCX sectoral indices (futures/options are FUTIDX/OPTIDX on MCX_COMM, not FUTCOM/OPTFUT).
+MCX_INDEX_NAMES = {"MCXBULLDEX", "MCXMETLDEX", "MCXENRGDEX", "MCXCOMPDEX", "MCXAGRIDEX"}
+# Segments Dhan's API cannot serve — rejected up front with a clear message.
+UNSERVED_SEGMENTS = {
+    "NSE_CURRENCY": "currency derivatives have no live contracts on Dhan any more",
+    "BSE_CURRENCY": "currency derivatives have no live contracts on Dhan any more",
+    "NSE_COMM": "NSE commodity derivatives are not served by Dhan's API (use MCX_COMM)",
+}
+
+
+def _check_segment(exchange_segment: str) -> str:
+    seg = str(exchange_segment or "").strip().upper()
+    if seg in UNSERVED_SEGMENTS:
+        raise ValueError(f"{seg} is not available on Dhan: {UNSERVED_SEGMENTS[seg]}. Supported: NSE_EQ, BSE_EQ, IDX_I, NSE_FNO, BSE_FNO, MCX_COMM.")
+    return seg
 
 
 class DhanError(RuntimeError):
@@ -357,28 +378,78 @@ class Underlying(dict):
             raise AttributeError(k) from e
 
 
-def resolve_underlying(symbol: str) -> Underlying:
-    """Look up any F&O underlying by ticker (index or NSE F&O stock).
+def resolve_underlying(symbol: str, exchange: str | None = None) -> Underlying:
+    """Look up any option underlying by ticker: index, NSE/BSE F&O stock or MCX commodity.
 
     >>> resolve_underlying("NIFTY")
     {'scrip': 13, 'seg': 'IDX_I', 'name': 'NIFTY'}
+    >>> resolve_underlying("GOLD")   # via the scrip master
+    {'scrip': 114, 'seg': 'MCX_COMM', 'name': 'GOLD', 'contract_segment': 'MCX_COMM', 'contract_instrument': 'OPTFUT', 'exchange': 'MCX', 'kind': 'commodity', ...}
 
-    Raises ValueError with the checked-universe counts if the name is unknown,
-    rather than guessing an id.
+    NSE indices / NSE F&O stocks resolve from the built-in table; everything
+    else (MCX commodities, BSE stock options, BSE/MCX indices) from the cached
+    scrip master. `exchange` NSE|BSE|MCX picks the listing when several exist.
+    Raises ValueError rather than guessing an id.
     """
     name = " ".join(str(symbol).strip().upper().split())
     if not name:
         raise ValueError("Empty underlying symbol.")
     idx = INDEX_ALIASES.get(name, name)
-    if idx in FNO_INDICES:
-        return Underlying(scrip=FNO_INDICES[idx], seg="IDX_I", name=idx)
-    if name in FNO_STOCKS:
-        return Underlying(scrip=FNO_STOCKS[name], seg="NSE_EQ", name=name)
+    if not exchange:
+        if idx in FNO_INDICES:
+            return Underlying(scrip=FNO_INDICES[idx], seg="IDX_I", name=idx)
+        if name in FNO_STOCKS:
+            return Underlying(scrip=FNO_STOCKS[name], seg="NSE_EQ", name=name)
+    if _master is not None:
+        return Underlying(_master.resolve_underlying(name, exchange))
     raise ValueError(
         f'"{symbol}" is not a known F&O underlying (checked {len(FNO_INDICES)} '
         f"indices and {len(FNO_STOCKS)} NSE F&O stocks). Use the exchange "
         "ticker, e.g. NIFTY, BANKNIFTY, RELIANCE, BAJAJ-AUTO."
     )
+
+
+def resolve_symbol(symbol: str, exchange_segment: str | None = None, kind: str | None = None) -> dict[str, Any] | None:
+    """Resolve ONE ticker to the instrument to quote/chart — "TCS"→NSE share (NSE_EQ), "NIFTY"/"SENSEX"→index (IDX_I), "GOLD"/"CRUDEOIL"/"SILVER"→nearest live MCX future (MCX_COMM). Returns {security_id, exchange_segment, symbol, display_name, instrument, kind, lot_size, expiry_date (futures)…} or None; steer with exchange_segment / kind (equity|index|commodity|future)."""
+    _need_master("resolve_symbol")
+    return _master.resolve_symbol(symbol, exchange_segment, kind)
+
+
+def search_instruments(query: str, exchange_segment: str | None = None, instrument: str | None = None, limit: int = 20, include_expired: bool = False) -> list[dict[str, Any]]:
+    """Substring search over the scrip master (ticker / display name); filter by exchange_segment (NSE_EQ, BSE_EQ, IDX_I, NSE_FNO, BSE_FNO, MCX_COMM) and/or instrument (EQUITY, INDEX, FUTSTK, FUTIDX, FUTCOM, OPTSTK, OPTIDX, OPTFUT). Expired contracts hidden unless include_expired."""
+    _need_master("search_instruments")
+    return _master.search_instruments(query, exchange_segment, instrument, limit, include_expired)
+
+
+def find_option_contracts(underlying: str, expiry_date: str | None = None, option_type: str | None = None, strike_price: float | None = None, limit: int = 50, exchange: str | None = None) -> list[dict[str, Any]]:
+    """Option contracts of an underlying (index, NSE/BSE stock or MCX commodity) from the scrip master — no Dhan call: filter by expiry_date YYYY-MM-DD, option_type CE/PE, strike_price, exchange NSE|BSE|MCX. Rows carry security_id, exchange_segment, expiry_date, strike_price, option_type, lot_size."""
+    _need_master("find_option_contracts")
+    return _master.find_option_contracts(underlying, expiry_date, option_type, strike_price, limit, exchange)
+
+
+def instrument_for(security_id: Any, exchange_segment: str) -> str:
+    """Chart `instrument` enum for a security id from the scrip master (EQUITY/INDEX/FUTCOM/OPTFUT/OPTIDX/…)."""
+    _need_master("instrument_for")
+    return _master.instrument_for(security_id, exchange_segment)
+
+
+def market_status(at: str | None = None) -> dict[str, Any]:
+    """Which markets are open (Mon–Fri; holidays NOT modelled): NSE/BSE 09:15–15:30 IST, MCX 09:00–23:30 IST. `at`='YYYY-MM-DD HH:MM' IST asks about another moment. Returns {now_ist, weekday, nse_bse:{open, session}, mcx:{open, session}, open}."""
+    now = datetime.strptime(at, "%Y-%m-%d %H:%M").replace(tzinfo=IST) if at else datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+    weekday = now.weekday() < 5
+    out: dict[str, Any] = {"now_ist": now.strftime("%Y-%m-%d %H:%M:%S"), "weekday": now.strftime("%A")}
+    for key, (start, end, desc) in (("nse_bse", ("09:15", "15:30", "NSE/BSE cash, F&O and indices")), ("mcx", ("09:00", "23:30", "MCX commodities"))):
+        sh, sm = map(int, start.split(":"))
+        eh, em = map(int, end.split(":"))
+        out[key] = {"open": weekday and sh * 60 + sm <= minutes <= eh * 60 + em, "session": f"{start}–{end} IST", "covers": desc}
+    out["open"] = out["nse_bse"]["open"] or out["mcx"]["open"]
+    return out
+
+
+def _need_master(fn: str) -> None:
+    if _master is None:
+        raise RuntimeError(f"{fn} needs the instrument master (mcp/instruments.py) which failed to import.")
 
 
 def list_underlyings(kind: Literal["all", "index", "stock"] = "all") -> list[str]:
@@ -394,12 +465,16 @@ def list_underlyings(kind: Literal["all", "index", "stock"] = "all") -> list[str
 def contract_segment(u: Underlying | str) -> str:
     """Exchange segment the underlying's OPTION contracts trade on."""
     u = resolve_underlying(u) if isinstance(u, str) else u
+    if u.get("contract_segment"):
+        return u["contract_segment"]
     return "BSE_FNO" if u["name"] in BSE_INDEX_NAMES else "NSE_FNO"
 
 
 def contract_instrument(u: Underlying | str) -> str:
     """Dhan `instrument` enum for the underlying's option contracts."""
     u = resolve_underlying(u) if isinstance(u, str) else u
+    if u.get("contract_instrument"):
+        return u["contract_instrument"]
     return "OPTIDX" if u["seg"] == "IDX_I" else "OPTSTK"
 
 
@@ -470,14 +545,14 @@ def _seg_map(
     exchange_segment: str | None,
 ) -> dict[str, list[int]]:
     if instruments:
-        return {seg: [int(i) for i in ids] for seg, ids in instruments.items()}
+        return {_check_segment(seg): [int(i) for i in ids] for seg, ids in instruments.items()}
     if security_id is None or not exchange_segment:
         raise ValueError(
             "Pass either instruments={'NSE_EQ': [2885]} or "
             "security_id=... with exchange_segment=...."
         )
     ids = security_id if isinstance(security_id, (list, tuple, set)) else [security_id]
-    return {exchange_segment: [int(i) for i in ids]}
+    return {_check_segment(exchange_segment): [int(i) for i in ids]}
 
 
 def ltp(
@@ -582,6 +657,11 @@ def guess_instrument(exchange_segment: str, symbol: str | None = None) -> str:
         return "INDEX"
     sym = (symbol or "").upper()
     is_option = any(f"-{x}" in sym or sym.endswith(x) for x in ("CE", "PE", "CALL", "PUT"))
+    if seg == "MCX_COMM":
+        mcx_index = sym.split("-")[0].split(" ")[0] in MCX_INDEX_NAMES
+        if mcx_index:
+            return "OPTIDX" if is_option else "FUTIDX"
+        return "OPTFUT" if is_option else "FUTCOM"
     head = sym.split("-")[0] if sym else ""
     two = "-".join(sym.split("-")[:2]) if "-" in sym else ""
     name = two if (two in FNO_STOCKS or INDEX_ALIASES.get(two, two) in FNO_INDICES) else head
@@ -589,6 +669,17 @@ def guess_instrument(exchange_segment: str, symbol: str | None = None) -> str:
     if is_option:
         return "OPTIDX" if is_index else "OPTSTK"
     return "FUTIDX" if is_index else "FUTSTK"
+
+
+def _instrument_of(security_id: Any, exchange_segment: str, symbol: str | None) -> str:
+    """guess_instrument when a symbol (or a non-derivative segment) is given; else the scrip master; else the old guess."""
+    seg = exchange_segment.upper()
+    if symbol or seg.endswith("_EQ") or seg == "IDX_I" or _master is None:
+        return guess_instrument(seg, symbol)
+    try:
+        return _master.instrument_for(security_id, seg)
+    except Exception:
+        return guess_instrument(seg, symbol)
 
 
 def intraday_candles(
@@ -601,16 +692,21 @@ def intraday_candles(
     symbol: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
-    oi: bool = False,
+    oi: bool | None = None,
 ) -> list[dict[str, Any]]:
-    """Intraday OHLCV candles (plus openInterest when oi=True, F&O only).
+    """Intraday OHLCV candles (+openInterest: default ON for every derivative incl. MCX, off for EQUITY/INDEX; pass oi= to force).
 
     interval is minutes: 1, 5, 15, 25 or 60. Up to 90 days of history.
-    `instrument` defaults to guess_instrument(exchange_segment, symbol).
+    `instrument` defaults to guess_instrument(exchange_segment, symbol), or the
+    scrip master when no symbol is given on a derivative segment.
     Each row: {timestamp (epoch s), open, high, low, close, volume[, openInterest]}.
     """
     if interval not in (1, 5, 15, 25, 60):
         raise ValueError("interval must be one of 1, 5, 15, 25, 60 (minutes).")
+    exchange_segment = _check_segment(exchange_segment)
+    instrument = instrument or _instrument_of(security_id, exchange_segment, symbol)
+    if oi is None:
+        oi = instrument not in ("EQUITY", "INDEX")
     _data_throttle.acquire()
     return _zip_candles(
         _request(
@@ -620,7 +716,7 @@ def intraday_candles(
             body={
                 "securityId": str(security_id),
                 "exchangeSegment": exchange_segment,
-                "instrument": instrument or guess_instrument(exchange_segment, symbol),
+                "instrument": instrument,
                 "interval": interval,
                 "fromDate": from_date or days_ago(days_back),
                 "toDate": to_date or tomorrow(),
@@ -639,14 +735,18 @@ def daily_candles(
     symbol: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
-    oi: bool = False,
+    oi: bool | None = None,
     expiry_code: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Daily OHLCV candles — trend and level work. Same row shape as intraday."""
+    """Daily OHLCV candles — trend and level work. Same row shape as intraday (OI default ON for derivatives)."""
+    exchange_segment = _check_segment(exchange_segment)
+    instrument = instrument or _instrument_of(security_id, exchange_segment, symbol)
+    if oi is None:
+        oi = instrument not in ("EQUITY", "INDEX")
     body: dict[str, Any] = {
         "securityId": str(security_id),
         "exchangeSegment": exchange_segment,
-        "instrument": instrument or guess_instrument(exchange_segment, symbol),
+        "instrument": instrument,
         "fromDate": from_date or days_ago(days_back),
         "toDate": to_date or tomorrow(),
         "oi": oi,
@@ -766,7 +866,7 @@ def option_chain(
 
 def option_candles(
     security_id: Any,
-    underlying: str | Underlying,
+    underlying: str | Underlying | None = None,
     interval: int = 15,
     days_back: int = 5,
     *,
@@ -775,14 +875,23 @@ def option_candles(
 ) -> list[dict[str, Any]]:
     """Intraday OHLCV + open-interest candles for ONE option contract.
 
-    `security_id` is the per-contract securityId from an option_chain() row;
-    `underlying` decides the exchange (NSE_FNO vs BSE_FNO) and instrument type.
+    `security_id` is the per-contract securityId from an option_chain() row.
+    `underlying` decides the exchange/instrument (NSE_FNO/BSE_FNO/MCX_COMM); when
+    omitted, the contract is looked up in the scrip master.
     """
-    u = resolve_underlying(underlying) if isinstance(underlying, str) else underlying
+    if underlying is None:
+        _need_master("option_candles without underlying")
+        info = _master.contract_info(security_id)
+        if not info or not str(info.get("instrument", "")).startswith("OPT"):
+            raise ValueError(f"security_id {security_id} is not an option contract in the scrip master — pass underlying=.")
+        seg, inst = info["exchange_segment"], info["instrument"]
+    else:
+        u = resolve_underlying(underlying) if isinstance(underlying, str) else underlying
+        seg, inst = contract_segment(u), contract_instrument(u)
     return intraday_candles(
         security_id,
-        contract_segment(u),
-        contract_instrument(u),
+        seg,
+        inst,
         interval,
         days_back,
         from_date=from_date,
@@ -798,7 +907,7 @@ def expired_options(
     to_date: str,
     *,
     strike: str = "ATM",
-    expiry_flag: Literal["WEEK", "MONTH"] = "WEEK",
+    expiry_flag: Literal["WEEK", "MONTH"] | None = None,
     expiry_code: int = 1,
     interval: int = 60,
     fields: Iterable[str] = ("close", "iv", "oi", "strike", "spot"),
@@ -816,6 +925,8 @@ def expired_options(
     Un-requested `fields` come back as empty arrays, so ask for what you need.
     """
     u = resolve_underlying(underlying) if isinstance(underlying, str) else underlying
+    if expiry_flag is None:  # WEEK as before for the built-in universe; MONTH for stocks/commodities from the master
+        expiry_flag = "MONTH" if u.get("kind") in ("stock", "commodity") else "WEEK"
     span = (date.fromisoformat(to_date) - date.fromisoformat(from_date)).days
     if span <= 0:
         raise ValueError("to_date must be after from_date.")
@@ -1053,7 +1164,8 @@ _API_NAMES = [
     "expiry_list", "nearest_expiry", "option_chain", "option_candles",
     "expired_options",
     # instruments
-    "resolve_underlying", "list_underlyings", "contract_segment",
+    "resolve_symbol", "search_instruments", "find_option_contracts", "instrument_for",
+    "market_status", "resolve_underlying", "list_underlyings", "contract_segment",
     "contract_instrument", "guess_instrument", "FNO_INDICES", "FNO_STOCKS",
     # indicators
     "closes", "sma", "ema", "rsi", "macd", "bollinger", "atr", "vwap",
@@ -1222,12 +1334,19 @@ The script runs with the Dhan read API preloaded as plain functions, e.g.:
     option_chain("NIFTY"), expiry_list("BANKNIFTY"), nearest_expiry("NIFTY")
     option_candles(contract_security_id, "NIFTY")
     expired_options("NIFTY", "CALL", from_date, to_date)
-    resolve_underlying("RELIANCE") -> {"scrip": ..., "seg": ..., "name": ...}
+    resolve_symbol("TCS" | "NIFTY" | "GOLD") -> {security_id, exchange_segment, kind, ...}
+    resolve_underlying("RELIANCE" | "GOLD") -> {"scrip": ..., "seg": ..., "name": ...}
+    find_option_contracts("CRUDEOIL", option_type="CE"), market_status()
     sma/ema/rsi/macd/bollinger/atr/vwap/pct_change over candle series
     today(), days_ago(n), to_ist(timestamp), pp(value)
 
 Call `print(help_api())` for the full one-line-per-function listing. The
 accompanying SKILL.md documents every signature, return shape and Dhan quirk.
+
+Markets (exchange_segment): NSE_EQ/BSE_EQ stocks & ETFs · IDX_I indices · NSE_FNO/
+BSE_FNO index+stock F&O · MCX_COMM commodities (GOLD, SILVER, CRUDEOIL, NATURALGAS,
+COPPER…). Currency derivatives are NOT available on Dhan. Hours: NSE/BSE 09:15–15:30
+IST, MCX 09:00–23:30 IST (market_status()).
 
 Notes: stdout is what comes back (a trailing bare expression is echoed too);
 exceptions come back as a traceback rather than failing the tool; scripts are
