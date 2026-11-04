@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-watchers.py — script-based market watchers for the zap-eve-mcp OAuth server.
+watchers.py — script-based market watchers for the /markets Dhan MCP OAuth server.
 
 Loaded (guarded) by dhan_mcp_oauth.py; dhan_mcp.py stays byte-identical.
 Plan + user-confirmed decisions: docs/plan-mcp-watchers.md.
@@ -46,6 +46,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,9 @@ from urllib.parse import urlparse
 
 import anyio
 import httpx
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import markets_brand as brand  # noqa: E402 — /markets pages + emails
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from starlette.requests import Request
@@ -319,7 +323,7 @@ def apply_check(baseline_done: bool, latched: bool, met: bool) -> dict[str, bool
 # ---------------------------------------------------------------------------
 
 
-def send_email(to: str, subject: str, text: str) -> bool:
+def send_email(to: str, subject: str, text: str, html_body: str | None = None) -> bool:
     api_key = os.environ.get("RESEND_API_KEY")
     if not api_key:
         log.warning("RESEND_API_KEY unset — would email %s: %s", to, subject)
@@ -330,10 +334,11 @@ def send_email(to: str, subject: str, text: str) -> bool:
             base + "/emails",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "from": os.environ.get("OTP_FROM_EMAIL") or "Zap Trade <login-link@codeongrass.com>",
+                "from": brand.email_from(),
                 "to": [to],
                 "subject": subject,
                 "text": text,
+                **({"html": html_body} if html_body else {}),
             },
             timeout=15.0,
         )
@@ -343,25 +348,16 @@ def send_email(to: str, subject: str, text: str) -> bool:
         return False
 
 
-def _fire_email_text(row: sqlite3.Row, value: Any, detail: str | None) -> str:
+def _fire_email(row: sqlite3.Row, value: Any, detail: str | None) -> tuple[str, str, str]:
+    """(subject, text, html) for a fired watcher, in the /markets brand."""
     when = datetime.now(IST).strftime("%d %b %Y, %H:%M IST")
-    lines = [
-        f"Your watcher on {row['symbol']} just triggered.",
-        "",
-        f"Condition: {row['label']}",
-    ]
-    if value is not None:
-        lines.append(f"Value: {value}")
-    if detail:
-        lines.append(f"Detail: {detail}")
-    lines += [
-        f"Time: {when}",
-        "",
-        f"Manage your watchers: {page_url()}",
-        "",
-        "Zap is read-only — it can never trade. It will alert again only after the condition resets and comes true again.",
-    ]
-    return "\n".join(lines)
+    m = brand.watcher_alert(row["symbol"], row["label"], None if value is None else str(value), detail, when, page_url())
+    return m.subject, m.text, m.html
+
+
+def _paused_email(message: str) -> tuple[str, str, str]:
+    m = brand.watchers_paused(message, page_url())
+    return m.subject, m.text, m.html
 
 
 # ---------------------------------------------------------------------------
@@ -369,9 +365,9 @@ def _fire_email_text(row: sqlite3.Row, value: Any, detail: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 BROKER_ERROR_MESSAGES = {
-    "token_expired": "Dhan token expired — reconnect Dhan in the Zap app, then resume this watcher.",
-    "disconnected": "Dhan is disconnected — reconnect in the Zap app, then resume this watcher.",
-    "not_connected": "Dhan is not connected — connect in the Zap app, then resume this watcher.",
+    "token_expired": "Dhan token expired — reconnect Dhan in the /markets app, then resume this watcher.",
+    "disconnected": "Dhan is disconnected — reconnect in the /markets app, then resume this watcher.",
+    "not_connected": "Dhan is not connected — connect in the /markets app, then resume this watcher.",
 }
 DATA_API_MESSAGE = (
     "Dhan Data-API subscription missing (error 806) — this check needs it. Resubscribe on dhan.co, then resume."
@@ -479,8 +475,7 @@ def _sweep_user(
         if creds["reason"] == "token_expired" and errored:
             send_email(
                 errored[0]["email"],
-                "Zap watcher paused — reconnect Dhan",
-                f"Your Dhan token expired, so your watchers can't check the market.\n\n{message}\n\n{page_url()}",
+                *_paused_email(message),
             )
         return
 
@@ -506,8 +501,7 @@ def _sweep_user(
                 if errored:
                     send_email(
                         errored[0]["email"],
-                        "Zap watcher paused — reconnect Dhan",
-                        f"Your Dhan token expired, so your watchers can't check the market.\n\n{message}\n\n{page_url()}",
+                        *_paused_email(message),
                     )
                 return
             count = row["error_count"] + 1
@@ -543,7 +537,7 @@ def _sweep_user(
                 (fire_id, row["id"], now, fields["last_value"], res["detail"]),
             )
             _sql().commit()
-            if send_email(row["email"], f"⚡ {row['symbol']}: {row['label']}", _fire_email_text(row, res["value"], res["detail"])):
+            if send_email(row["email"], *_fire_email(row, res["value"], res["detail"])):
                 _sql().execute("UPDATE fires SET emailed = 1 WHERE id = ?", (fire_id,))
                 _sql().commit()
             fields["last_fired_at"] = now
@@ -556,39 +550,8 @@ def _sweep_user(
 # Page rendering
 # ---------------------------------------------------------------------------
 
-_SHELL = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>Watchers — Zap</title>
-<style>
-  :root {{ color-scheme: light dark; }}
-  .muted {{ opacity: .6; font-size: .9em; }}
-  body {{ font: 15px/1.5 system-ui, sans-serif; max-width: 44rem;
-         margin: 6vh auto; padding: 0 16px; }}
-  h1 {{ font-size: 1.15rem; }}
-  .brand {{ display: inline-block; background: #0c6b3d; color: #fff;
-         border-radius: 8px; padding: 4px 10px; font-weight: 700; }}
-  .meta {{ color: #888; font-size: .85rem; }}
-  .card {{ border: 1px solid #8884; border-radius: 10px; padding: 14px 16px; margin: 12px 0; }}
-  .row {{ display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }}
-  .chip {{ font-size: .75rem; font-weight: 700; border-radius: 999px; padding: 2px 10px; }}
-  .c-ARMED {{ background: #0c6b3d22; color: #0c6b3d; }}
-  .c-PAUSED {{ background: #8886; }}
-  .c-ERROR {{ background: #b3261e22; color: #b3261e; }}
-  .c-EXPIRED, .c-CANCELLED {{ background: #8883; color: #888; }}
-  .err {{ background: #b3261e22; border: 1px solid #b3261e; border-radius: 6px; padding: .6rem .8rem; }}
-  form.inline {{ display: inline; }}
-  button {{ padding: .35rem 1rem; font: inherit; border: 1px solid #8886;
-         border-radius: 6px; background: transparent; cursor: pointer; }}
-  button.primary {{ background: #0c6b3d; border: 0; color: #fff; }}
-  button.danger {{ color: #b3261e; border-color: #b3261e66; }}
-  label {{ display: block; margin: 1rem 0 .25rem; font-weight: 600; }}
-  input {{ width: 100%; box-sizing: border-box; padding: .55rem; font: inherit;
-         border: 1px solid #8888; border-radius: 6px; }}
-  .fires {{ font-size: .82rem; color: #888; margin-top: 6px; }}
-</style></head><body>
-<p><span class="brand">&#9889; Zap</span></p>
-{body}
-</body></html>"""
+def _page(title: str, body: str) -> str:
+    return brand.shell(title, body, page_url(), wide=True)
 
 
 def _fmt_ts(ts: int | None) -> str:
@@ -601,9 +564,9 @@ def _watcher_card(row: sqlite3.Row, fires: list[sqlite3.Row]) -> str:
     status = row["status"]
     buttons = []
     if status == "ARMED":
-        buttons.append(("pause", "Pause", ""))
+        buttons.append(("pause", "Pause", "secondary"))
     if status in ("PAUSED", "ERROR"):
-        buttons.append(("resume", "Resume", "primary"))
+        buttons.append(("resume", "Resume", "secondary"))
     if status in ACTIVE:
         buttons.append(("cancel", "Cancel", "danger"))
     forms = "".join(
@@ -665,20 +628,20 @@ def _render_list(session: dict[str, str]) -> str:
     body += cards(active) if active else "<p class='meta'>No active watchers — ask Claude to create one.</p>"
     if finished:
         body += "<h1 style='margin-top:24px'>Finished</h1>" + cards(finished)
-    return _SHELL.format(body=body)
+    return _page("Watchers", body)
 
 
 def _login_email_page(notice: str = "") -> str:
     body = (
         "<h1>Sign in to see your watchers</h1>"
-        "<p class='meta'>Same login as the Zap app. You can only ever see your own watchers.</p>"
+        "<p class='meta'>Same login as the /markets app. You can only ever see your own watchers.</p>"
         + notice
         + f'<form method="post" action="{page_url()}/login/email">'
         '<label for="email">Email</label>'
         '<input id="email" name="email" type="email" autocomplete="email" autofocus>'
-        '<button class="primary" style="margin-top:1.2rem" type="submit">Send code</button></form>'
+        '<button type="submit">Send code</button></form>'
     )
-    return _SHELL.format(body=body)
+    return _page("Sign in", body)
 
 
 def _login_otp_page(email: str, notice: str = "") -> str:
@@ -690,9 +653,9 @@ def _login_otp_page(email: str, notice: str = "") -> str:
         f'<input type="hidden" name="email" value="{html.escape(email)}">'
         '<label for="code">6-digit code</label>'
         '<input id="code" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" autofocus>'
-        '<button class="primary" style="margin-top:1.2rem" type="submit">Sign in</button></form>'
+        '<button type="submit">Sign in</button></form>'
     )
-    return _SHELL.format(body=body)
+    return _page("Enter your login code", body)
 
 
 def _err_box(msg: str) -> str:

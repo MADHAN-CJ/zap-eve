@@ -1,8 +1,13 @@
 <div align="center">
 
-# zap-eve-agent
+# /markets · Dhan edition
 
 **A read-only AI analyst for your live Dhan positions.**
+
+Repo `zap-eve-agent` — the web app at [zap-eve.vercel.app](https://zap-eve.vercel.app)
+and the `/markets` Dhan MCP connector live here. Sibling editions:
+`zap-kite-mcp` (Zerodha) and `slash-dhan-mcp` (shared-feed Dhan). Product name
+is always written **/markets** (spoken "Slash Markets"; never spelled out in UI).
 
 Tap a position, ask about it. The agent reads your P&L, candles, option chains,
 funds and orders — computes the numbers in bash and Python rather than guessing
@@ -109,7 +114,7 @@ sequenceDiagram
     P-->>B: NDJSON pass-through
 ```
 
-1. **A Zap 401 only ever means "log in again."** An expired Dhan token is
+1. **A /markets 401 only ever means "log in again."** An expired Dhan token is
    broker status, surfaced as a reconnect banner.
 2. **Ownership checked on every session-scoped call.**
 3. **Position never reaches the model as a parameter** — stripped, stored in

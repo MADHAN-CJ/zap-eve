@@ -1,3 +1,5 @@
+import { EMAIL_FROM, watchAlertEmail, watchPausedEmail } from './emails';
+
 /**
  * Watch-related emails via Resend (same verified sender as the OTP mail).
  * Failures log and return false — an email problem must never break a sweep.
@@ -20,7 +22,7 @@ export async function sendWatchEmail(opts: {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: process.env.OTP_FROM_EMAIL || 'Zap Trade <login-link@codeongrass.com>',
+        from: EMAIL_FROM,
         to: [opts.to],
         subject: opts.subject,
         text: opts.text,
@@ -38,28 +40,17 @@ export async function sendWatchEmail(opts: {
   }
 }
 
+const appUrl = () => process.env.APP_BASE_URL || 'https://zap-eve.vercel.app';
+
 export function alertEmail(
   symbol: string,
   headline: string,
   summary: string,
   instruction: string,
-): { subject: string; text: string } {
-  const app = process.env.APP_BASE_URL || 'https://zap-eve.vercel.app';
-  return {
-    subject: `⚡ Zap alert: ${symbol} — ${headline}`,
-    text:
-      `${summary}\n\nYou asked: "${instruction}"\n\n` +
-      `The full analysis is in the watch's chat: ${app}\n\n` +
-      `This watch keeps alerting on new triggers until you cancel it (it expires 10 days after creation).\n\n— Zap`,
-  };
+): { subject: string; text: string; html: string } {
+  return watchAlertEmail({ symbol, headline, summary, instruction, appUrl: appUrl() });
 }
 
-export function reconnectEmail(symbol: string): { subject: string; text: string } {
-  return {
-    subject: `Zap watch paused — reconnect Dhan`,
-    text:
-      `Your Zap market watch on ${symbol} stopped because your Dhan access token expired ` +
-      `(Dhan tokens last 24 hours).\n\nReconnect Dhan from the broker screen, then resume ` +
-      `the watch from its chat or the Watchers page.\n\n— Zap`,
-  };
+export function reconnectEmail(symbol: string): { subject: string; text: string; html: string } {
+  return watchPausedEmail(symbol, appUrl());
 }

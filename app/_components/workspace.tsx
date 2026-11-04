@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { LogOutIcon, PlugZapIcon } from 'lucide-react';
+import { Wordmark } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -294,7 +295,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-4">
           <span className="flex items-center gap-2 truncate font-medium text-sm">
-            Zap position analyst
+            <Wordmark /> position analyst
             <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-xs">
               read-only
             </span>
@@ -352,8 +353,8 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
               <div className="flex flex-col items-center gap-3 text-center">
                 <h1 className="font-medium text-2xl tracking-tighter">Connect your Dhan account</h1>
                 <p className="max-w-sm text-muted-foreground text-sm">
-                  Zap reads your positions from Dhan so you can chat about them. Read-only — it can
-                  never place an order.
+                  <Wordmark /> reads your positions from Dhan so you can chat about them. Read-only:
+                  it can never place an order.
                 </p>
                 <Button onClick={() => setBrokerModalOpen(true)}>Connect Dhan</Button>
               </div>
@@ -432,7 +433,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
           <DialogHeader>
             <DialogTitle>Sign out</DialogTitle>
             <DialogDescription>
-              Sign out of Zap{getUser()?.email ? ` (${getUser()?.email})` : ''}? Your Dhan
+              Sign out of <Wordmark />{getUser()?.email ? ` (${getUser()?.email})` : ''}? Your Dhan
               connection and chats stay on the server — logging back in with the same email
               brings everything back.
             </DialogDescription>

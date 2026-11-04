@@ -9,8 +9,8 @@ import {
   PanelLeftOpenIcon,
   RadarIcon,
   Trash2Icon,
-  ZapIcon,
 } from 'lucide-react';
+import { Logomark, Wordmark } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { positionKey, type PositionRef, type ThreadSummary } from '@/lib/client/threads-api';
@@ -114,9 +114,7 @@ export function Sidebar({
         )}
         inert={!railCollapsed}
       >
-        <span className="mt-4 flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <ZapIcon className="size-4" />
-        </span>
+        <Logomark className="mt-4 h-6" />
         <button
           aria-label="Expand sidebar"
           className="mt-3 rounded-md p-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
@@ -157,10 +155,10 @@ export function Sidebar({
         inert={railCollapsed}
       >
       <div className="flex items-center gap-2.5 px-4 pt-4 pb-2">
-        <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <ZapIcon className="size-4" />
+        <Logomark className="h-6" />
+        <span className="flex-1 font-semibold">
+          <Wordmark />
         </span>
-        <span className="flex-1 font-semibold">Zap</span>
         <button
           aria-label="Collapse sidebar"
           className="rounded-md p-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
