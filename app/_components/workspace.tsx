@@ -370,8 +370,8 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
               />
             </div>
           ) : (
-            <div className="flex flex-1 items-center justify-center">
-              <div className="flex flex-col items-center gap-3 text-center">
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-10">
+              <div className="flex flex-col items-center gap-3 px-4 pt-16 pb-6 text-center">
                 <h1 className="font-medium text-2xl tracking-tighter">Connect your Dhan account</h1>
                 <p className="max-w-sm text-muted-foreground text-sm">
                   <Wordmark /> reads your positions from Dhan so your AI assistant can analyse
@@ -379,6 +379,8 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
                 </p>
                 <Button onClick={() => setBrokerModalOpen(true)}>Connect Dhan</Button>
               </div>
+              {/* Step two is visible before step one: the skill and connector URL don't need Dhan. */}
+              <SetupCard step="Next, " />
             </div>
           )
         ) : view.kind === 'watchers' ? (
@@ -489,7 +491,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
  * three steps. Mirrors the setup card on slash-dhan-mcp's watchers page; this
  * connector uses OAuth, so step 2 is a sign-in rather than "auth: none".
  */
-function SetupCard() {
+function SetupCard({ step = '' }: { readonly step?: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -502,7 +504,10 @@ function SetupCard() {
   };
   return (
     <section className="mx-auto w-full max-w-3xl px-4 pt-6 sm:px-6">
-      <h2 className="font-medium text-lg tracking-tight">Connect your AI assistant</h2>
+      <h2 className="font-medium text-lg tracking-tight">
+        {step}
+        {step ? 'connect' : 'Connect'} your AI assistant
+      </h2>
       <p className="text-muted-foreground text-sm">
         Read-only: it can analyse your Dhan positions and set watchers, but can never trade.
       </p>

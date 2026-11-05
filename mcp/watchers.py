@@ -634,8 +634,10 @@ def _render_list(session: dict[str, str]) -> str:
 
 
 def _login_email_page(notice: str = "") -> str:
+    # The setup card is public: a new user needs the connector URL + skill before they have anything to sign in for.
     body = (
-        "<h1>Sign in to see your watchers</h1>"
+        brand.setup_section(issuer(), f"{issuer()}/{brand.SKILL_ZIP_NAME}", f"{issuer()}/SKILL.md")
+        + "<h1>Sign in to see your watchers</h1>"
         "<p class='meta'>Same login as the /markets app. You can only ever see your own watchers.</p>"
         + notice
         + f'<form method="post" action="{page_url()}/login/email">'
