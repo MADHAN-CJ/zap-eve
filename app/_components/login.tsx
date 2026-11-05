@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Loader2Icon, ZapIcon } from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
+import { Logomark, Wordmark } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { requestOtp, verifyOtp } from '@/lib/client/settings';
@@ -56,12 +57,12 @@ export function Login({ onLoggedIn }: { readonly onLoggedIn: () => void }) {
     <main className="flex h-dvh items-center justify-center bg-background text-foreground">
       <div className="flex w-full max-w-sm flex-col gap-6 px-6">
         <div className="flex flex-col items-center gap-3 text-center">
-          <span className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <ZapIcon className="size-5" />
-          </span>
-          <h1 className="font-medium text-3xl tracking-tighter">Zap</h1>
+          <Logomark className="h-10" />
+          <h1 className="font-medium text-3xl tracking-tighter">
+            <Wordmark />
+          </h1>
           <p className="text-muted-foreground text-sm">
-            Chat with an analyst about your Dhan positions. Read-only — it can never trade.
+            Chat with an analyst about your Dhan positions. Read-only: it can never trade.
           </p>
         </div>
 

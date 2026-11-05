@@ -1,11 +1,14 @@
-# dhan-data MCP server
+# /markets Dhan MCP server
 
 `dhan_mcp.py` is a self-contained MCP server that exposes the whole Dhan read
 API through **one** tool, `run_python`: the model writes a Python script, the
 server runs it with every Dhan function preloaded, and returns what it printed.
 
 Give the model [`SKILL.md`](./SKILL.md) — that is the document that teaches it
-which functions exist.
+which functions exist. `dhan_mcp_oauth.py` is the hosted, multi-user /markets
+connector (OAuth + the app's email-OTP login, per-user Dhan credentials from the
+product DB, watchers); `dhan_mcp_hosted.py` is the single-token variant. Pages
+and emails share the /markets brand through `markets_brand.py`.
 
 The Dhan layer is a port of `agent/lib/dhan/{client,specs,options-specs,underlying}.ts`,
 including the rate limits, the `{data,status}` unwrapping, the column-oriented
@@ -46,7 +49,7 @@ python mcp/dhan_mcp.py --exec 'pp(funds())'  # run one script locally
 ```json
 {
   "mcpServers": {
-    "dhan-data": {
+    "markets-dhan": {
       "command": "python",
       "args": ["/absolute/path/to/zap-eve/mcp/dhan_mcp.py"],
       "env": { "DHAN_CLIENT_ID": "...", "DHAN_ACCESS_TOKEN": "..." }
@@ -55,7 +58,7 @@ python mcp/dhan_mcp.py --exec 'pp(funds())'  # run one script locally
 }
 ```
 
-Or, for Claude Code: `claude mcp add dhan-data -- python /absolute/path/to/zap-eve/mcp/dhan_mcp.py`
+Or, for Claude Code: `claude mcp add markets-dhan -- python /absolute/path/to/zap-eve/mcp/dhan_mcp.py`
 
 ## A note on isolation
 

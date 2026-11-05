@@ -1,13 +1,20 @@
 ---
-name: dhan-data
-description: Query a live Dhan (DhanHQ v2) trading account by writing Python. Use for anything about the user's positions, holdings, funds, orders or trades, and for Indian market data — LTP/quotes, intraday and daily candles, option chains, expiries, per-contract option candles, and expired-option history. Trigger on questions about P&L, a position, NIFTY/BANKNIFTY/SENSEX or any NSE F&O stock, option IV/OI/greeks, max pain, or "what is X trading at".
+name: slash-markets-dhan-account
+description: Query the user's live Dhan (DhanHQ v2) account and Indian market data by writing Python through the /markets Dhan connector. Use for anything about the user's positions, holdings, funds, orders or trades, and for Indian market data — LTP/quotes, intraday and daily candles, option chains, expiries, per-contract option candles, and expired-option history. Trigger on questions about P&L, a position, NIFTY/BANKNIFTY/SENSEX or any NSE F&O stock, option IV/OI/greeks, max pain, or "what is X trading at".
 ---
 
-# Dhan data via Python
+# /markets Dhan data via Python
 
-You have exactly one tool: **`run_python(code)`**. It executes your Python on a
-server that already holds the user's Dhan credentials and returns whatever the
-script printed.
+You have one data tool: **`run_python(code)`**. It executes your Python on /markets'
+server, where the user's own Dhan session is already wired in, and returns whatever
+the script printed. The data never enters your context unless you print it, so for
+any question that needs more than one number write a script and **print the
+conclusion**, not the rows.
+
+`auth_status` tells you who is signed in and whether their Dhan connection is
+usable; if it is not, relay its `message` — the user reconnects Dhan in the
+/markets app (`appUrl`), never by pasting credentials into the chat. `create_watch`
+arms an e-mail watcher; `list_watchers` shows them.
 
 ## Model the question as a function
 

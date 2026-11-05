@@ -138,7 +138,7 @@ def login_url() -> str:
 _PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Dhan login — zap-eve-mcp</title>
+<title>Dhan credentials · /markets</title>
 <style>
   :root {{ color-scheme: light dark; }}
   body {{ font: 15px/1.5 system-ui, sans-serif; max-width: 34rem;
@@ -149,14 +149,14 @@ _PAGE = """<!doctype html><html><head><meta charset="utf-8">
          font: inherit; border: 1px solid #8888; border-radius: 6px; }}
   textarea {{ height: 7rem; font-family: ui-monospace, monospace; font-size: .8rem; }}
   button {{ margin-top: 1.25rem; padding: .55rem 1.4rem; font: inherit;
-         border: 0; border-radius: 6px; background: #0c6b3d; color: #fff; }}
+         border: 0; border-radius: 6px; background: #171a17; color: #fff; }}
   .err {{ background: #b3261e22; border: 1px solid #b3261e; border-radius: 6px;
          padding: .6rem .8rem; }}
-  .ok  {{ background: #0c6b3d22; border: 1px solid #0c6b3d; border-radius: 6px;
+  .ok  {{ background: #e6efdc; border: 1px solid #34432e; border-radius: 6px;
          padding: .6rem .8rem; }}
   .meta {{ color: #888; font-size: .85rem; }}
 </style></head><body>
-<h1>Dhan credentials — zap-eve-mcp</h1>
+<h1>Dhan credentials</h1>
 <p class="meta">Current: client id <b>{client_id}</b>, token <b>{token}</b>{saved_at}.
 Dhan access tokens expire every 24&nbsp;hours — paste a fresh one from
 web.dhan.co (Profile → DhanHQ Trading APIs) whenever the assistant says the
@@ -246,7 +246,7 @@ def build_hosted_server():
 
     @server.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> JSONResponse:
-        return JSONResponse({"ok": True, "server": "zap-eve-mcp", "token": masked_token()})
+        return JSONResponse({"ok": True, "server": "markets-dhan-mcp", "token": masked_token()})
 
     return server
 
@@ -282,7 +282,7 @@ def main(argv: Any = None) -> int:
         apply_creds(saved["client_id"], saved["access_token"])
 
     server = build_hosted_server()
-    print(f"zap-eve-mcp (hosted) on http://{args.host}:{args.port}/mcp  (+ /login, /health)", file=sys.stderr)
+    print(f"/markets Dhan MCP (hosted) on http://{args.host}:{args.port}/mcp  (+ /login, /health)", file=sys.stderr)
     server.run(transport="streamable-http", host=args.host, port=args.port)
     return 0
 

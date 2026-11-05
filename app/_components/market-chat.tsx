@@ -2,6 +2,7 @@
 
 import React from 'react';
 import type { IChartApi } from 'lightweight-charts';
+import { Wordmark } from '@/components/brand';
 import { authHeaders } from '@/lib/client/settings';
 import type { PositionRef } from '@/lib/client/threads-api';
 import {
@@ -603,7 +604,7 @@ export function MarketChat({
               session={chat.session}
               starters={chat.starters}
             />
-            <p className="ai-disclaimer">Zap AI provides chart research, not financial advice. Read-only — it can never trade.</p>
+            <p className="ai-disclaimer"><Wordmark /> provides chart research, not financial advice. Read-only: it can never trade.</p>
           </aside>
         </div>
       </div>

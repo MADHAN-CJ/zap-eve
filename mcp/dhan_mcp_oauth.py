@@ -9,13 +9,13 @@ This wrapper turns it into a multi-user claude.ai connector:
     on the MCP SDK's native support (DCR, PKCE, /authorize, /token, bearer
     enforcement, metadata routes all SDK-generated). The user clicks
     Connect on claude.ai → our authorization page opens → they sign in
-    with the SAME email-OTP login as the zap-eve app (same Neon `users` +
+    with the SAME email-OTP login as the /markets app (same Neon `users` +
     `otps` tables, same HMAC + cooldown/TTL semantics).
-  * Per-user Dhan credentials come from the zap-eve `broker_connections`
+  * Per-user Dhan credentials come from the /markets `broker_connections`
     rows (AES-256-GCM at rest) — users connect and daily-refresh Dhan in
-    the zap-eve app; this server only reads. Tri-state fail-closed, and a
+    the /markets app; this server only reads. Tri-state fail-closed, and a
     Dhan 401 is judged by a /fundlimit probe before the row is marked
-    token_expired (never a Zap 401).
+    token_expired (never a /markets 401).
   * Script isolation: every run_python call spawns `dhan_mcp.py --exec -`
     as a SUBPROCESS whose environment holds only that caller's Dhan
     credentials (`--env-file /dev/null` so it cannot read the box .env).
@@ -26,11 +26,12 @@ This wrapper turns it into a multi-user claude.ai connector:
     in a local sqlite file — no schema changes to the product database.
 
 Env (beyond dhan_mcp's DHAN_MCP_EXEC_TIMEOUT / DHAN_MCP_MAX_OUTPUT):
-  DATABASE_URL           Neon Postgres (zap-eve product DB, read + OTP rows)
+  DATABASE_URL           Neon Postgres (/markets product DB, read + OTP rows)
   CREDS_ENCRYPTION_KEY   same secret as the app — decrypts broker creds
   CREDS_HASH_PEPPER      same secret as the app — OTP code HMAC
   RESEND_API_KEY         OTP email (unset → code logged to console, dev only)
-  OTP_FROM_EMAIL         default "Zap Trade <login-link@codeongrass.com>"
+  EMAIL_FROM             default "/markets <login-link@codeongrass.com>"
+                         (OTP_FROM_EMAIL still honoured)
   DHAN_MCP_ISSUER        public issuer URL, e.g.
                          https://uat.revise.network/zap-eve-mcp/v2
   DHAN_MCP_OAUTH_DB      sqlite path (default .dhan-oauth.sqlite3 beside
@@ -65,6 +66,7 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dhan_mcp  # noqa: E402 — the unmodified single-file server
+import markets_brand as brand  # noqa: E402 — /markets pages + emails
 
 from mcp.server.auth.middleware.auth_context import get_access_token  # noqa: E402
 from mcp.server.auth.provider import (  # noqa: E402
@@ -103,7 +105,7 @@ def app_url() -> str:
 
 
 # ---------------------------------------------------------------------------
-# zap-eve identity (Neon Postgres) — mirrors lib/server/otp.ts and
+# /markets identity (Neon Postgres) — mirrors lib/server/otp.ts and
 # agent/lib/db/{crypto,broker}.ts semantics exactly. All functions are sync;
 # call them via anyio.to_thread from async handlers.
 # ---------------------------------------------------------------------------
@@ -266,11 +268,9 @@ def _send_otp_email(email: str, code: str) -> None:
         "https://api.resend.com/emails",
         headers={"Authorization": f"Bearer {api_key}"},
         json={
-            "from": os.environ.get("OTP_FROM_EMAIL") or "Zap Trade <login-link@codeongrass.com>",
+            "from": brand.email_from(),
             "to": [email],
-            "subject": f"{code} is your Zap login code",
-            "text": f"Your Zap login code is {code}. It expires in 10 minutes.\n\n"
-            "If you didn't request it, ignore this email.",
+            **brand.login_code(code).resend_fields(),
         },
         timeout=15.0,
     )
@@ -330,7 +330,7 @@ def _now() -> int:
 
 
 class ZapOAuthProvider(OAuthAuthorizationServerProvider):
-    """SDK provider: sqlite state + zap-eve identity. The SDK owns protocol
+    """SDK provider: sqlite state + /markets identity. The SDK owns protocol
     validation (PKCE, redirect uris, DCR); this class owns storage + login."""
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
@@ -489,68 +489,30 @@ class ZapOAuthProvider(OAuthAuthorizationServerProvider):
 # Login pages (email → OTP), rendered by this process, opened by claude.ai.
 # ---------------------------------------------------------------------------
 
-_PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>Sign in — Zap</title>
-<style>
-  :root {{ color-scheme: light dark; }}
-  body {{ font: 15px/1.5 system-ui, sans-serif; max-width: 26rem;
-         margin: 10vh auto; padding: 0 16px; }}
-  h1 {{ font-size: 1.15rem; }}
-  .brand {{ display: inline-block; background: #0c6b3d; color: #fff;
-         border-radius: 8px; padding: 4px 10px; font-weight: 700; }}
-  label {{ display: block; margin: 1rem 0 .25rem; font-weight: 600; }}
-  input {{ width: 100%; box-sizing: border-box; padding: .55rem; font: inherit;
-         border: 1px solid #8888; border-radius: 6px; }}
-  button {{ margin-top: 1.25rem; padding: .55rem 1.6rem; font: inherit;
-         border: 0; border-radius: 6px; background: #0c6b3d; color: #fff; }}
-  .err {{ background: #b3261e22; border: 1px solid #b3261e; border-radius: 6px;
-         padding: .6rem .8rem; }}
-  .meta {{ color: #888; font-size: .85rem; }}
-</style></head><body>
-<p><span class="brand">&#9889; Zap</span></p>
-<h1>{title}</h1>
-<p class="meta">{sub}</p>
-{notice}
-<form method="post" action="{action}">
-  <input type="hidden" name="txn" value="{txn}">
-  {fields}
-  <button type="submit">{button}</button>
-</form>
-</body></html>"""
+# Page chrome lives in markets_brand.shell(); forms below only supply the body.
 
 
 def _email_page(txn: str, notice: str = "") -> str:
     # Form actions must be ABSOLUTE (issuer-based): the app lives behind an
     # nginx path prefix the browser can't see, so a root-relative action
     # would post to the public host's root and 404.
-    return _PAGE.format(
-        title="Connect Claude to your Zap account",
-        sub="Same login as the Zap app. Read-only: Claude can analyse your Dhan positions but can never trade.",
+    body = brand.email_form(
+        f"{issuer()}/login/email",
+        "Connect your AI to /markets",
+        "Same login as the /markets app. Read-only: your assistant can analyse your Dhan positions but can never trade.",
         notice=notice,
-        action=f"{issuer()}/login/email",
-        txn=html.escape(txn),
-        fields='<label for="email">Email</label>'
-        '<input id="email" name="email" type="email" autocomplete="email" autofocus>',
-        button="Send code",
+        hidden_fields=brand.hidden("txn", txn),
     )
+    return brand.shell("Sign in", body, app_url())
 
 
 def _otp_page(txn: str, email: str, notice: str = "") -> str:
-    return _PAGE.format(
-        title="Enter your login code",
-        sub=f"Sent to {html.escape(email)}. It expires in 10 minutes.",
-        notice=notice,
-        action=f"{issuer()}/login/otp",
-        txn=html.escape(txn),
-        fields='<label for="code">6-digit code</label>'
-        '<input id="code" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" autofocus>',
-        button="Sign in",
-    )
+    body = brand.otp_form(f"{issuer()}/login/otp", email, notice=notice, hidden_fields=brand.hidden("txn", txn))
+    return brand.shell("Enter your login code", body, app_url())
 
 
 def _err(msg: str) -> str:
-    return f'<p class="err">{html.escape(msg)}</p>'
+    return brand.error_box(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -611,9 +573,9 @@ def probe_token(dhan_client_id: str, access_token: str) -> bool:
 # ---------------------------------------------------------------------------
 
 BROKER_MESSAGES = {
-    "not_connected": "You haven't connected Dhan to your Zap account yet. Open {app} → Broker and connect Dhan, then try again.",
+    "not_connected": "You haven't connected Dhan to your /markets account yet. Open {app} → Broker and connect Dhan, then try again.",
     "token_expired": "Your Dhan token has expired (Dhan tokens last 24h). Open {app} → Broker and reconnect Dhan, then try again.",
-    "disconnected": "Dhan is disconnected from your Zap account. Open {app} → Broker and reconnect, then try again.",
+    "disconnected": "Dhan is disconnected from your /markets account. Open {app} → Broker and reconnect, then try again.",
     "error": "Could not read your broker connection just now — try again in a moment.",
 }
 
@@ -622,7 +584,7 @@ Who is signed in, and whether their Dhan connection is usable.
 
 Call this when run_python reports credential/token problems, or when the user
 asks about their connection. If the broker is not connected or the token has
-expired, relay the returned `message` — the user fixes it in the Zap app (the
+expired, relay the returned `message` — the user fixes it in the /markets app (the
 `appUrl`), never by pasting credentials into this chat.\
 """
 
@@ -633,7 +595,7 @@ def build_server():
     from mcp.server.mcpserver import MCPServer
 
     mcp_server = MCPServer(
-        "dhan-data",
+        "markets-dhan",
         auth_server_provider=provider,
         auth=AuthSettings(
             issuer_url=issuer(),
@@ -736,7 +698,7 @@ def build_server():
 
     @mcp_server.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> JSONResponse:
-        return JSONResponse({"ok": True, "server": "zap-eve-mcp", "auth": "oauth"})
+        return JSONResponse({"ok": True, "server": "markets-dhan-mcp", "auth": "oauth"})
 
     # Watchers (docs/plan-mcp-watchers.md). Guarded: any failure here — missing
     # module, missing WATCHERS_* secrets — disables the feature and leaves the
@@ -755,7 +717,7 @@ def build_server():
 def main(argv: Any = None) -> int:
     parser = argparse.ArgumentParser(
         prog="dhan_mcp_oauth",
-        description="Multi-user OAuth-gated hosting for dhan_mcp.py (zap-eve accounts).",
+        description="Multi-user OAuth-gated hosting for dhan_mcp.py (/markets accounts).",
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8017)
@@ -774,7 +736,7 @@ def main(argv: Any = None) -> int:
             break
 
     server = build_server()
-    print(f"zap-eve-mcp (oauth) on http://{args.host}:{args.port}/mcp  issuer={issuer()}", file=sys.stderr)
+    print(f"/markets Dhan MCP (oauth) on http://{args.host}:{args.port}/mcp  issuer={issuer()}", file=sys.stderr)
     server.run(transport="streamable-http", host=args.host, port=args.port)
     return 0
 
