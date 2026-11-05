@@ -123,21 +123,21 @@ export function Sidebar({
         </button>
         <Button
           aria-label="Positions"
-          className={cn('mt-2', homeActive && 'bg-accent text-accent-foreground')}
+          className={cn('mt-2', homeActive && 'bg-secondary text-secondary-foreground hover:bg-secondary/80')}
           onClick={onHome}
           size="icon-sm"
           title="Positions"
-          variant="secondary"
+          variant="ghost"
         >
           <LayoutListIcon className="size-4" />
         </Button>
         <Button
           aria-label="Watchers"
-          className={cn('mt-2', watchersActive && 'bg-accent text-accent-foreground')}
+          className={cn('mt-2', watchersActive && 'bg-secondary text-secondary-foreground hover:bg-secondary/80')}
           onClick={onWatchers}
           size="icon-sm"
           title="Watchers"
-          variant="secondary"
+          variant="ghost"
         >
           <RadarIcon className="size-4" />
         </Button>
@@ -169,18 +169,18 @@ export function Sidebar({
 
       <div className="flex flex-col gap-1.5 px-3 pt-2">
         <Button
-          className={cn('w-full justify-start', homeActive && 'bg-accent text-accent-foreground')}
+          className={cn('w-full justify-start', homeActive && 'bg-secondary text-secondary-foreground hover:bg-secondary/80')}
           onClick={onHome}
           size="sm"
-          variant="secondary"
+          variant="ghost"
         >
           <LayoutListIcon className="size-4" /> Positions
         </Button>
         <Button
-          className={cn('w-full justify-start', watchersActive && 'bg-accent text-accent-foreground')}
+          className={cn('w-full justify-start', watchersActive && 'bg-secondary text-secondary-foreground hover:bg-secondary/80')}
           onClick={onWatchers}
           size="sm"
-          variant="secondary"
+          variant="ghost"
         >
           <RadarIcon className="size-4" /> Watchers
         </Button>
