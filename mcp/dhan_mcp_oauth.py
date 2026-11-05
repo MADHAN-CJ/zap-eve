@@ -30,14 +30,14 @@ Env (beyond dhan_mcp's DHAN_MCP_EXEC_TIMEOUT / DHAN_MCP_MAX_OUTPUT):
   CREDS_ENCRYPTION_KEY   same secret as the app — decrypts broker creds
   CREDS_HASH_PEPPER      same secret as the app — OTP code HMAC
   RESEND_API_KEY         OTP email (unset → code logged to console, dev only)
-  EMAIL_FROM             default "/markets <login-link@codeongrass.com>"
+  EMAIL_FROM             default "Slash Markets <login-link@codeongrass.com>"
                          (OTP_FROM_EMAIL still honoured)
   DHAN_MCP_ISSUER        public issuer URL, e.g.
-                         https://uat.revise.network/zap-eve-mcp/v2
+                         https://dhan-mcp-test2.slash.markets
   DHAN_MCP_OAUTH_DB      sqlite path (default .dhan-oauth.sqlite3 beside
                          this file; box: /var/lib/zapevemcp/oauth.sqlite3)
   DHAN_MCP_APP_URL       where users connect Dhan (default
-                         https://zap-eve.vercel.app)
+                         https://dhan-test.slash.markets)
 
 Run:
     python mcp/dhan_mcp_oauth.py --http --port 8017
@@ -49,6 +49,7 @@ import argparse
 import hashlib
 import hmac as hmac_mod
 import html
+import io
 import json
 import logging
 import os
@@ -63,6 +64,8 @@ from typing import Any
 
 import anyio
 import httpx
+import zipfile
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dhan_mcp  # noqa: E402 — the unmodified single-file server
@@ -80,7 +83,13 @@ from mcp.server.auth.provider import (  # noqa: E402
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions  # noqa: E402
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken  # noqa: E402
 from starlette.requests import Request  # noqa: E402
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse  # noqa: E402
+from starlette.responses import (  # noqa: E402
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 
 log = logging.getLogger("dhan_mcp_oauth")
 
@@ -101,7 +110,7 @@ def issuer() -> str:
 
 
 def app_url() -> str:
-    return os.environ.get("DHAN_MCP_APP_URL") or "https://zap-eve.vercel.app"
+    return os.environ.get("DHAN_MCP_APP_URL") or "https://dhan-test.slash.markets"
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +598,23 @@ expired, relay the returned `message` — the user fixes it in the /markets app 
 """
 
 
+def transport_security():
+    """DNS-rebinding guard: the SDK only accepts Host=localhost by default, which
+    421s every request arriving via a tunnel or a proxy that preserves Host
+    (ngrok, Vercel...). Whitelist the issuer's host like the sibling servers."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    origins = ["http://127.0.0.1:*", "http://localhost:*"]
+    netloc = urlparse(issuer()).netloc
+    if netloc and not netloc.startswith(("127.0.0.1", "localhost")):
+        hosts += [netloc, f"{netloc}:*"]
+        origins += [f"https://{netloc}", f"http://{netloc}"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins
+    )
+
+
 def build_server():
     provider = ZapOAuthProvider()
 
@@ -599,7 +625,7 @@ def build_server():
         auth_server_provider=provider,
         auth=AuthSettings(
             issuer_url=issuer(),
-            resource_server_url=f"{issuer()}/mcp",
+            resource_server_url=issuer(),  # bare host is the resource; nginx maps "/" → "/mcp"
             client_registration_options=ClientRegistrationOptions(
                 enabled=True, valid_scopes=[SCOPE], default_scopes=[SCOPE]
             ),
@@ -696,6 +722,38 @@ def build_server():
             pass
         return resp
 
+    SKILL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SKILL.md")
+
+    def _skill_bytes() -> bytes | None:
+        try:
+            with open(SKILL_PATH, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    @mcp_server.custom_route("/SKILL.md", methods=["GET"])
+    async def skill_md(_request: Request) -> Response:
+        data = await anyio.to_thread.run_sync(_skill_bytes)
+        if data is None:
+            return PlainTextResponse("skill file not available", status_code=404)
+        return Response(
+            data, media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": 'inline; filename="SKILL.md"'},
+        )
+
+    @mcp_server.custom_route(f"/{brand.SKILL_ZIP_NAME}", methods=["GET"])
+    async def skill_zip(_request: Request) -> Response:
+        data = await anyio.to_thread.run_sync(_skill_bytes)
+        if data is None:
+            return PlainTextResponse("skill file not available", status_code=404)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"{brand.SKILL_NAME}/SKILL.md", data)
+        return Response(
+            buf.getvalue(), media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{brand.SKILL_ZIP_NAME}"'},
+        )
+
     @mcp_server.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"ok": True, "server": "markets-dhan-mcp", "auth": "oauth"})
@@ -736,8 +794,13 @@ def main(argv: Any = None) -> int:
             break
 
     server = build_server()
-    print(f"/markets Dhan MCP (oauth) on http://{args.host}:{args.port}/mcp  issuer={issuer()}", file=sys.stderr)
-    server.run(transport="streamable-http", host=args.host, port=args.port)
+    print(f"/markets Dhan MCP (oauth) on http://{args.host}:{args.port}/  issuer={issuer()}", file=sys.stderr)
+    # The transport stays on /mcp in-process (the SDK mounts custom routes AFTER
+    # the transport, so a "/" mount would shadow /login, /health, /watchers and
+    # the protected-resource metadata). nginx maps the bare host "/" → "/mcp",
+    # and resource_server_url advertises the root, so the connector URL is just
+    # https://<host>/ — same shape as slash-dhan-mcp.
+    server.run(transport="streamable-http", host=args.host, port=args.port, transport_security=transport_security())
     return 0
 
 

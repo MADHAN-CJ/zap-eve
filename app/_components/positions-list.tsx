@@ -1,6 +1,7 @@
 'use client';
 
-import { Loader2Icon, MessageSquareTextIcon, RefreshCwIcon } from 'lucide-react';
+import { Loader2Icon, RefreshCwIcon } from 'lucide-react';
+// CHAT: import { MessageSquareTextIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { DhanHolding, DhanPosition } from '@/lib/client/broker';
@@ -8,8 +9,8 @@ import type { DhanHolding, DhanPosition } from '@/lib/client/broker';
 /**
  * The home pane: the user's open positions AND demat holdings (Dhan keeps
  * them separate — /positions is today's trading, /holdings is delivery
- * stock), one tap → chat about it. A row that already has a chat resumes it
- * (the workspace decides — this component only reports the tap).
+ * stock). Read-only rows: the user asks about them from Claude through the
+ * connector. (CHAT: tapping a row used to open that position's chat hub.)
  */
 
 const inr = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
@@ -20,16 +21,14 @@ export function PositionsList({
   loading,
   error,
   onRefresh,
-  onChat,
-  onChatHolding,
 }: {
   readonly positions: DhanPosition[];
   readonly holdings: DhanHolding[];
   readonly loading: boolean;
   readonly error: string | null;
   readonly onRefresh: () => void;
-  readonly onChat: (position: DhanPosition) => void;
-  readonly onChatHolding: (holding: DhanHolding) => void;
+  // CHAT: readonly onChat: (position: DhanPosition) => void;
+  // CHAT: readonly onChatHolding: (holding: DhanHolding) => void;
 }) {
   const open = positions.filter((p) => p.positionType !== 'CLOSED' && Number(p.netQty) !== 0);
   const closed = positions.filter((p) => p.positionType === 'CLOSED' || Number(p.netQty) === 0);
@@ -49,7 +48,7 @@ export function PositionsList({
       {!loading && !error && positions.length === 0 && holdings.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           Nothing to show yet. Open positions and demat holdings in your Dhan account will appear
-          here — tap one to chat about it.
+          here. Ask your AI assistant about any of them.
         </p>
       ) : null}
 
@@ -60,14 +59,14 @@ export function PositionsList({
       ) : null}
 
       {open.map((p) => (
-        <PositionCard key={rowKey(p)} onChat={onChat} position={p} />
+        <PositionCard key={rowKey(p)} /* CHAT: onChat={onChat} */ position={p} />
       ))}
 
       {holdings.length > 0 ? (
         <>
           <p className="pt-2 font-medium text-muted-foreground text-xs tracking-wider">HOLDINGS</p>
           {holdings.map((h) => (
-            <HoldingCard holding={h} key={`${h.exchange}:${h.securityId}`} onChat={onChatHolding} />
+            <HoldingCard holding={h} key={`${h.exchange}:${h.securityId}`} /* CHAT: onChat={onChatHolding} */ />
           ))}
         </>
       ) : null}
@@ -76,7 +75,7 @@ export function PositionsList({
         <>
           <p className="pt-2 font-medium text-muted-foreground text-xs tracking-wider">CLOSED TODAY</p>
           {closed.map((p) => (
-            <PositionCard key={rowKey(p)} onChat={onChat} position={p} />
+            <PositionCard key={rowKey(p)} /* CHAT: onChat={onChat} */ position={p} />
           ))}
         </>
       ) : null}
@@ -86,19 +85,15 @@ export function PositionsList({
 
 function HoldingCard({
   holding: h,
-  onChat,
 }: {
   readonly holding: DhanHolding;
-  readonly onChat: (holding: DhanHolding) => void;
+  // CHAT: readonly onChat: (holding: DhanHolding) => void;
 }) {
   const qty = Number(h.totalQty ?? 0);
   const invested = qty * Number(h.avgCostPrice ?? 0);
   return (
-    <button
-      className="flex w-full items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:border-ring/40 hover:bg-accent/40"
-      onClick={() => onChat(h)}
-      type="button"
-    >
+    // CHAT: was a <button onClick={() => onChat(h)}> with hover styles.
+    <div className="flex w-full items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-left">
       <span className="min-w-0">
         <span className="flex items-center gap-2">
           <span className="truncate font-medium text-sm">{h.tradingSymbol}</span>
@@ -113,9 +108,9 @@ function HoldingCard({
       <span className="flex shrink-0 items-center gap-3">
         {/* Dhan holdings carry no LTP, so we show invested value, not P&L. */}
         <span className="font-medium text-sm tabular-nums">₹{inr.format(invested)}</span>
-        <MessageSquareTextIcon className="size-4 text-muted-foreground" />
+        {/* CHAT: <MessageSquareTextIcon className="size-4 text-muted-foreground" /> */}
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -123,20 +118,16 @@ const rowKey = (p: DhanPosition) => `${p.exchangeSegment}:${p.securityId}:${p.pr
 
 function PositionCard({
   position: p,
-  onChat,
 }: {
   readonly position: DhanPosition;
-  readonly onChat: (position: DhanPosition) => void;
+  // CHAT: readonly onChat: (position: DhanPosition) => void;
 }) {
   const pnl = Number(p.unrealizedProfit ?? 0) + Number(p.realizedProfit ?? 0);
   const qty = Number(p.netQty);
   const avg = qty >= 0 ? Number(p.buyAvg ?? 0) : Number(p.sellAvg ?? 0);
   return (
-    <button
-      className="flex w-full items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:border-ring/40 hover:bg-accent/40"
-      onClick={() => onChat(p)}
-      type="button"
-    >
+    // CHAT: was a <button onClick={() => onChat(p)}> with hover styles.
+    <div className="flex w-full items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-left">
       <span className="min-w-0">
         <span className="flex items-center gap-2">
           <span className="truncate font-medium text-sm">{p.tradingSymbol}</span>
@@ -161,8 +152,8 @@ function PositionCard({
         <span className={cn('font-medium text-sm tabular-nums', pnl >= 0 ? 'text-primary' : 'text-destructive')}>
           {pnl >= 0 ? '+' : '−'}₹{inr.format(Math.abs(pnl))}
         </span>
-        <MessageSquareTextIcon className="size-4 text-muted-foreground" />
+        {/* CHAT: <MessageSquareTextIcon className="size-4 text-muted-foreground" /> */}
       </span>
-    </button>
+    </div>
   );
 }

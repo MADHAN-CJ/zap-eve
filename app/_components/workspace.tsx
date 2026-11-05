@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { LogOutIcon, PlugZapIcon } from 'lucide-react';
+import { CheckIcon, CopyIcon, DownloadIcon, FileTextIcon, LogOutIcon, PlugZapIcon } from 'lucide-react';
 import { Wordmark } from '@/components/brand';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,11 @@ import {
   type DhanPosition,
 } from '@/lib/client/broker';
 import { clearSession, getUser, isLoggedIn } from '@/lib/client/settings';
+/* CHAT DISABLED (2026-11-05): the dashboard is a connector for Claude only —
+ * like zap-kite-mcp's. The in-app eve chat (position hub, chat history,
+ * "New chat", the chart-chat screen) is commented out, not deleted; the
+ * proxy, thread API and agent are untouched. Uncomment the blocks marked
+ * CHAT to bring it back.
 import {
   deleteThread as apiDeleteThread,
   renameThread as apiRenameThread,
@@ -31,25 +37,31 @@ import {
   type ThreadDetail,
   type ThreadSummary,
 } from '@/lib/client/threads-api';
+*/
 import { BrokerModal } from './broker-modal';
 import { Login } from './login';
-import { PositionHub } from './position-hub';
+// CHAT: import { PositionHub } from './position-hub';
 import { PositionsList } from './positions-list';
 import { Sidebar } from './sidebar';
 import { WatchersPage } from './watchers-page';
-import { MarketChat } from './market-chat';
+// CHAT: import { MarketChat } from './market-chat';
 
 /**
  * The workspace shell: login gate → (broker gate) → sidebar + main pane.
- * Main pane is the positions list (home), a position hub (that position's
- * chats + "New chat"), a draft chat (no eve session yet; first send creates
- * it), or a resumed thread (history + eve session cursor). Any number of
- * threads per position.
+ * Main pane is the positions list (home) or the watchers page. The user
+ * talks to the agent from Claude through the /markets connector, never here.
  */
+
+/** Where to add the connector in Claude (bare host; see mcp/dhan_mcp_oauth.py). */
+const MCP_URL = (process.env.NEXT_PUBLIC_MCP_URL ?? 'https://dhan-mcp-test2.slash.markets').replace(/\/$/, '');
+/** Served by the OAuth MCP (mcp/dhan_mcp_oauth.py): the SKILL.md beside it, raw and zipped. */
+const SKILL_ZIP_URL = `${MCP_URL}/slash-markets-dhan-account.zip`;
+const SKILL_MD_URL = `${MCP_URL}/SKILL.md`;
 
 type View =
   | { kind: 'home' }
-  | { kind: 'watchers' }
+  | { kind: 'watchers' };
+/* CHAT:
   | { kind: 'hub'; position: PositionRef }
   | { kind: 'draft'; position: PositionRef }
   | { kind: 'thread'; id: string };
@@ -59,6 +71,7 @@ const STARTERS = [
   "What's the recent trend on this instrument?",
   'What are the biggest risks to this position?',
 ] as const;
+*/
 
 export function Workspace() {
   // Session epoch: bumped on login/logout; keys the whole workspace.
@@ -125,6 +138,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
 
   const openBrokerModal = useCallback(() => setBrokerModalOpen(true), []);
 
+  /* CHAT: threads, thread detail, draft lifecycle, hub helpers.
   // --- Threads (chat history) ---
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const refreshThreads = useCallback(async (): Promise<ThreadSummary[]> => {
@@ -206,7 +220,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
     ? (threads.find((t) => t.eveSessionId === draftSessionId)?.id ?? null)
     : null;
 
-  /** Tap a row: open that position's hub (its chats + "New chat"). */
+  // Tap a row: open that position's hub (its chats + "New chat").
   const openHub = useCallback((position: PositionRef) => {
     setDraftSessionId(null);
     setView({ kind: 'hub', position });
@@ -229,7 +243,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
     [openHub],
   );
 
-  /** Holdings have no exchangeSegment/productType — map exchange → *_EQ, CNC. */
+  // Holdings have no exchangeSegment/productType — map exchange → *_EQ, CNC.
   const openHoldingChat = useCallback(
     (h: DhanHolding) =>
       openHub({
@@ -269,33 +283,37 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
     return null;
   })();
 
+  */
+
   const brokerConnected = broker?.status === 'active';
   const brokerExpired = broker?.status === 'token_expired';
 
   return (
     <main className="flex h-dvh overflow-hidden bg-background text-foreground">
       <Sidebar
-        activeId={sidebarActiveId}
-        activePositionKey={activePositionKey}
         homeActive={view.kind === 'home'}
         onWatchers={() => setView({ kind: 'watchers' })}
         watchersActive={view.kind === 'watchers'}
-        onDelete={(id) => void removeThread(id)}
         onHome={() => {
-          setDraftSessionId(null);
+          // CHAT: setDraftSessionId(null);
           setView({ kind: 'home' });
           if (brokerConnected) void refreshPositions();
         }}
+        /* CHAT:
+        activeId={sidebarActiveId}
+        activePositionKey={activePositionKey}
+        onDelete={(id) => void removeThread(id)}
         onRename={renameThread}
         onSelect={selectThread}
         onSelectPosition={openHub}
         threads={threads}
+        */
       />
 
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-4">
           <span className="flex items-center gap-2 truncate font-medium text-sm">
-            <Wordmark /> position analyst
+            <Wordmark /> for Dhan
             <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-xs">
               read-only
             </span>
@@ -326,7 +344,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
 
         {brokerExpired ? (
           <div className="flex items-center justify-between gap-3 border-b bg-destructive/5 px-4 py-2 text-sm">
-            <span>Your Dhan token expired (tokens last 24h) — the analyst can’t read your account until you reconnect.</span>
+            <span>Your Dhan token expired (tokens last 24h) — your AI assistant can’t read your account until you reconnect.</span>
             <Button onClick={() => setBrokerModalOpen(true)} size="sm" variant="outline">
               Reconnect
             </Button>
@@ -339,30 +357,35 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
               Loading…
             </div>
           ) : brokerConnected || brokerExpired ? (
-            <PositionsList
-              error={positionsError}
-              holdings={holdings}
-              loading={positionsLoading}
-              onChat={(p) => void openPositionChat(p)}
-              onChatHolding={(h) => void openHoldingChat(h)}
-              onRefresh={() => void refreshPositions()}
-              positions={positions}
-            />
+            <div className="flex min-h-0 flex-1 flex-col">
+              <SetupCard />
+              <PositionsList
+                error={positionsError}
+                holdings={holdings}
+                loading={positionsLoading}
+                // CHAT: onChat={(p) => void openPositionChat(p)}
+                // CHAT: onChatHolding={(h) => void openHoldingChat(h)}
+                onRefresh={() => void refreshPositions()}
+                positions={positions}
+              />
+            </div>
           ) : (
             <div className="flex flex-1 items-center justify-center">
               <div className="flex flex-col items-center gap-3 text-center">
                 <h1 className="font-medium text-2xl tracking-tighter">Connect your Dhan account</h1>
                 <p className="max-w-sm text-muted-foreground text-sm">
-                  <Wordmark /> reads your positions from Dhan so you can chat about them. Read-only:
-                  it can never place an order.
+                  <Wordmark /> reads your positions from Dhan so your AI assistant can analyse
+                  them. Read-only: it can never place an order.
                 </p>
                 <Button onClick={() => setBrokerModalOpen(true)}>Connect Dhan</Button>
               </div>
             </div>
           )
         ) : view.kind === 'watchers' ? (
-          <WatchersPage onOpenThread={selectThread} />
-        ) : view.kind === 'hub' ? (
+          <WatchersPage /* CHAT: onOpenThread={selectThread} */ />
+        ) : null}
+        {/* CHAT: position hub, draft chat and resumed thread panes.
+        view.kind === 'hub' ? (
           <PositionHub
             onBack={() => setView({ kind: 'home' })}
             onDelete={(id) => void removeThread(id)}
@@ -413,7 +436,8 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
           <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
             {detailError ?? 'Loading chat…'}
           </div>
-        )}
+        )
+        */}
       </section>
 
       <BrokerModal
@@ -434,7 +458,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
             <DialogTitle>Sign out</DialogTitle>
             <DialogDescription>
               Sign out of <Wordmark />{getUser()?.email ? ` (${getUser()?.email})` : ''}? Your Dhan
-              connection and chats stay on the server — logging back in with the same email
+              connection and watchers stay on the server — logging back in with the same email
               brings everything back.
             </DialogDescription>
           </DialogHeader>
@@ -457,5 +481,72 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
         </DialogContent>
       </Dialog>
     </main>
+  );
+}
+
+/**
+ * "Connect your AI assistant": connector URL + copy, skill download, and the
+ * three steps. Mirrors the setup card on slash-dhan-mcp's watchers page; this
+ * connector uses OAuth, so step 2 is a sign-in rather than "auth: none".
+ */
+function SetupCard() {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(MCP_URL);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard unavailable — the field is selectable
+    }
+  };
+  return (
+    <section className="mx-auto w-full max-w-3xl px-4 pt-6 sm:px-6">
+      <h2 className="font-medium text-lg tracking-tight">Connect your AI assistant</h2>
+      <p className="text-muted-foreground text-sm">
+        Read-only: it can analyse your Dhan positions and set watchers, but can never trade.
+      </p>
+      <div className="mt-3 flex flex-col gap-4 rounded-lg border bg-card p-4">
+        <div>
+          <p className="mb-2 font-medium text-sm">Connector URL</p>
+          <div className="flex gap-2">
+            <Input className="font-mono text-[13px]" onFocus={(e) => e.currentTarget.select()} readOnly value={MCP_URL} />
+            <Button onClick={() => void copy()} type="button" variant="secondary">
+              {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+        </div>
+        <div>
+          <p className="mb-2 font-medium text-sm">Skill for the assistant</p>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild type="button">
+              <a href={SKILL_ZIP_URL}>
+                <DownloadIcon className="size-4" /> Download skill (.zip)
+              </a>
+            </Button>
+            <Button asChild type="button" variant="outline">
+              <a href={SKILL_MD_URL} rel="noreferrer" target="_blank">
+                <FileTextIcon className="size-4" /> View SKILL.md
+              </a>
+            </Button>
+          </div>
+        </div>
+      </div>
+      <ol className="mt-3 list-decimal space-y-1 pl-5 text-muted-foreground text-sm">
+        <li>
+          In claude.ai open Settings → Connectors → Add custom connector and paste the connector URL.
+          Claude Code:{' '}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[12px] text-foreground">
+            claude mcp add --transport http markets-dhan {MCP_URL}
+          </code>
+        </li>
+        <li>Click Connect and sign in with the same email login as this app, then approve read-only access.</li>
+        <li>
+          Give the assistant the skill: upload the zip in claude.ai (Settings → Capabilities → Skills), or
+          unzip it into <code className="font-mono text-[12px]">.claude/skills/</code> for Claude Code.
+        </li>
+      </ol>
+    </section>
   );
 }

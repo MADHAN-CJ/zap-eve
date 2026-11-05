@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 PRODUCT = "/markets"
-DEFAULT_EMAIL_FROM = "/markets <login-link@codeongrass.com>"  # must stay on a Resend-verified domain
+DEFAULT_EMAIL_FROM = "Slash Markets <login-link@codeongrass.com>"  # spoken name as the From display  # must stay on a Resend-verified domain
 
 
 def email_from() -> str:
@@ -90,10 +90,41 @@ _SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .c-ERROR {{ background: var(--negative-surface); color: var(--negative); }}
   .c-EXPIRED, .c-CANCELLED {{ background: var(--surface); color: var(--muted); }}
   .fires {{ font-size: .82rem; color: var(--muted); margin-top: 6px; }}
+  .setup {{ margin: 1.2rem 0 1.6rem; }}
+  .setup h2 {{ font-family: "Libre Baskerville", Georgia, serif; font-weight: 500; font-size: 1.3rem; margin: 0 0 .3rem; }}
+  .panel {{ border: 1px solid var(--border); border-radius: 14px; padding: 16px; background: #fff; display: grid; gap: 14px; }}
+  .field label {{ display: block; font-size: 14px; font-weight: 500; margin: 0 0 8px; }}
+  .joined {{ display: flex; }}
+  .joined input {{ flex: 1; min-width: 0; height: 44px; min-height: 44px; padding: 0 16px; font-size: 15px;
+                 border-radius: 999px 0 0 999px; border-right: 0; }}
+  .joined button {{ margin: 0; height: 44px; min-height: 44px; border-radius: 0 999px 999px 0; }}
+  .actions {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
+  .btn {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 20px;
+         border-radius: 999px; border: 1px solid var(--button); background: var(--button); color: #fff;
+         font: inherit; font-size: 15px; text-decoration: none; cursor: pointer; margin: 0; }}
+  .btn:hover {{ background: #343a32; }}
+  .btn.secondary {{ background: #fff; color: var(--ink); border-color: var(--border); min-height: 44px; padding: 0 20px; }}
+  .btn.secondary:hover {{ background: var(--surface); }}
+  .btn svg {{ width: 18px; height: 18px; flex: none; }}
+  .btn:focus-visible, .joined input:focus-visible {{ outline: 2px solid var(--ring); outline-offset: 3px; }}
+  .steps {{ margin: .6rem 0 0; padding-left: 1.2rem; color: var(--muted); }}
+  .steps li {{ margin: .2rem 0; }}
 </style></head><body><main>
 <a class="brand" href="{home}">{logomark}<span><span class="slash" aria-hidden="true">/</span>markets</span></a>
 {body}
-</main></body></html>"""
+</main>
+<script>
+document.querySelectorAll("[data-copy]").forEach(function (b) {{
+  b.addEventListener("click", async function () {{
+    var input = document.getElementById(b.getAttribute("data-copy"));
+    if (!input) return;
+    input.select();
+    try {{ await navigator.clipboard.writeText(input.value); }} catch (e) {{ document.execCommand("copy"); }}
+    var label = b.querySelector("span"); var old = label.textContent; label.textContent = "Copied";
+    setTimeout(function () {{ label.textContent = old; }}, 1500);
+  }});
+}});
+</script></body></html>"""
 
 
 def shell(title: str, body: str, home: str, *, wide: bool = False) -> str:
@@ -107,6 +138,54 @@ def shell(title: str, body: str, home: str, *, wide: bool = False) -> str:
         mono=MONO,
         width="44rem" if wide else "28rem",
         vmargin="6vh" if wide else "10vh",
+    )
+
+
+ICON_COPY = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/>'
+    '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+)
+ICON_DOWNLOAD = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
+    '<polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+)
+ICON_EYE = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>'
+    '<circle cx="12" cy="12" r="3"/></svg>'
+)
+
+SKILL_NAME = "slash-markets-dhan-account"  # must match mcp/SKILL.md frontmatter `name`
+SKILL_ZIP_NAME = f"{SKILL_NAME}.zip"
+
+
+def setup_section(mcp_url: str, skill_url: str, skill_md_url: str) -> str:
+    """'Connect your AI assistant' card: connector URL + copy, skill download, steps.
+    Same shape as slash-dhan-mcp's watchers page; this connector uses OAuth, so
+    the steps say sign-in rather than 'authentication: none'."""
+    fields = (
+        '<div class="field"><label for="mcp-url">Connector URL</label><div class="joined">'
+        f'<input id="mcp-url" type="text" readonly value="{html.escape(mcp_url)}">'
+        f'<button type="button" class="btn" data-copy="mcp-url">{ICON_COPY}<span>Copy</span></button>'
+        "</div></div>"
+        '<div class="field"><label>Skill for the assistant</label><div class="actions">'
+        f'<a class="btn" href="{html.escape(skill_url)}">{ICON_DOWNLOAD}<span>Download skill (.zip)</span></a>'
+        f'<a class="btn secondary" href="{html.escape(skill_md_url)}">{ICON_EYE}<span>View SKILL.md</span></a>'
+        "</div></div>"
+    )
+    return (
+        '<section class="setup"><h2>Connect your AI assistant</h2>'
+        '<p class="meta">Read-only: it can analyse your Dhan positions but can never trade.</p>'
+        f'<div class="panel">{fields}</div>'
+        '<ol class="steps">'
+        "<li>In claude.ai open Settings → Connectors → Add custom connector and paste the connector URL. "
+        "Claude Code: <code>claude mcp add --transport http markets-dhan &lt;URL&gt;</code>.</li>"
+        "<li>Click Connect and sign in with the same email login as this app; approve read-only access.</li>"
+        "<li>Give the assistant the skill: upload the zip in claude.ai (Settings → Capabilities → Skills), "
+        "or unzip it into <code>.claude/skills/</code> for Claude Code.</li>"
+        "</ol></section>"
     )
 
 

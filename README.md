@@ -4,7 +4,8 @@
 
 **A read-only AI analyst for your live Dhan positions.**
 
-Repo `zap-eve-agent` — the web app at [zap-eve.vercel.app](https://zap-eve.vercel.app)
+Repo `zap-eve-agent` — the web app at [dhan-test.slash.markets](https://dhan-test.slash.markets)
+and the MCP connector at `https://dhan-mcp-test2.slash.markets/` (bare host)
 and the `/markets` Dhan MCP connector live here. Sibling editions:
 `zap-kite-mcp` (Zerodha) and `slash-dhan-mcp` (shared-feed Dhan). Product name
 is always written **/markets** (spoken "Slash Markets"; never spelled out in UI).

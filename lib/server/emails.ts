@@ -18,7 +18,7 @@ const MONO = "'Departure Mono', ui-monospace, Menlo, Consolas, monospace";
 
 /** Sender for every /markets email. Must stay on a Resend-verified domain. */
 export const EMAIL_FROM =
-  process.env.EMAIL_FROM || process.env.OTP_FROM_EMAIL || '/markets <login-link@codeongrass.com>';
+  process.env.EMAIL_FROM || process.env.OTP_FROM_EMAIL || 'Slash Markets <login-link@codeongrass.com>';
 
 export interface Email {
   subject: string;

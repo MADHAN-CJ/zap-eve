@@ -621,10 +621,12 @@ def _render_list(session: dict[str, str]) -> str:
         return "".join(out)
 
     body = (
-        f"<h1>Your watchers</h1><p class='meta'>Signed in as {html.escape(session['email'])}. "
+        f"<p class='meta'>Signed in as {html.escape(session['email'])}. "
         "Watchers check the market during trading hours (NSE/BSE 09:15–15:30, MCX 09:00–23:30 IST) and email you when their condition becomes true. "
         "Create new ones by asking Claude.</p>"
     )
+    body += brand.setup_section(issuer(), f"{issuer()}/{brand.SKILL_ZIP_NAME}", f"{issuer()}/SKILL.md")
+    body += "<h1>Your watchers</h1>"
     body += cards(active) if active else "<p class='meta'>No active watchers — ask Claude to create one.</p>"
     if finished:
         body += "<h1 style='margin-top:24px'>Finished</h1>" + cards(finished)
