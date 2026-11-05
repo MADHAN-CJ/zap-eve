@@ -88,29 +88,19 @@ export function BrokerModal({
           <DialogDescription>
             {expired
               ? status?.lastRenewError
-                ? `Automatic renewal stopped: ${status.lastRenewError} Generate a fresh token on Dhan and paste it here — renewal resumes by itself.`
-                : 'Your Dhan access token expired. Generate a fresh token on Dhan and paste it here — from then on it renews itself.'
+                ? `Your Dhan connection has expired: ${status.lastRenewError} Generate a fresh token on Dhan and paste it here.`
+                : 'Your Dhan access token expired. Generate a fresh token on Dhan and paste it here.'
               : connected
-                ? `Connected as ${status?.dhanClientId}. The token renews itself daily; paste a fresh one only if Dhan asks you to, or disconnect.`
-                : 'Generate an access token in Dhan (web → My profile → DhanHQ Trading APIs) and paste it here with your client ID. It stays on the server, encrypted, and renews itself every day — the AI never sees it.'}
+                ? `Connected as ${status?.dhanClientId}. Paste a fresh token only if Dhan asks you to, or disconnect.`
+                : 'Generate an access token in Dhan (web → My profile → DhanHQ Trading APIs) and paste it here with your client ID. It stays on the server, encrypted — the AI never sees it.'}
           </DialogDescription>
         </DialogHeader>
 
         {connected ? (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
-            <dt className="text-muted-foreground">Renews automatically</dt>
-            <dd>{ist(status?.renewAfter) ?? 'on the next check'}</dd>
-            <dt className="text-muted-foreground">Current token expires</dt>
-            <dd>{ist(status?.tokenExpiresAt) ?? '—'}</dd>
-            <dt className="text-muted-foreground">Last renewed</dt>
-            <dd>{ist(status?.lastRenewedAt) ?? 'not yet (pasted token)'}</dd>
-            {status?.renewFailures ? (
-              <>
-                <dt className="text-muted-foreground">Last attempt</dt>
-                <dd className="text-destructive">{status.lastRenewError ?? 'failed'} (retrying)</dd>
-              </>
-            ) : null}
-          </dl>
+          <p className="text-muted-foreground text-xs">
+            The token renews itself daily{status?.renewAfter ? ` (next ${ist(status.renewAfter)})` : ''}.
+            {status?.renewFailures ? ` Last attempt failed: ${status.lastRenewError ?? 'unknown error'} — retrying.` : ''}
+          </p>
         ) : null}
 
         <div className="space-y-4">

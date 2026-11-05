@@ -327,7 +327,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
                     : 'size-2 rounded-full bg-destructive'
                 }
               />
-              {brokerConnected ? 'Dhan connected · auto-renews' : brokerExpired ? 'Reconnect Dhan' : 'Connect Dhan'}
+              {brokerConnected ? 'Dhan connected' : brokerExpired ? 'Reconnect Dhan' : 'Connect Dhan'}
               <PlugZapIcon className="size-4" />
             </Button>
             <Button
@@ -344,7 +344,7 @@ function LoggedInWorkspace({ onLogout }: { readonly onLogout: () => void }) {
 
         {brokerExpired ? (
           <div className="flex items-center justify-between gap-3 border-b bg-destructive/5 px-4 py-2 text-sm">
-            <span>Your Dhan connection stopped renewing — your AI assistant can’t read your account until you reconnect Dhan once.</span>
+            <span>Your Dhan connection has expired — your AI assistant can’t read your account until you reconnect Dhan.</span>
             <Button onClick={() => setBrokerModalOpen(true)} size="sm" variant="outline">
               Reconnect
             </Button>
