@@ -44,7 +44,7 @@ export async function GET(req: Request) {
         );
       }
       if (e instanceof DhanError && (e.status === 401 || e.status === 403)) {
-        await markTokenExpired(user.userId);
+        await markTokenExpired(user.userId, creds.creds.accessToken); // D3: never expire a freshly renewed token
         return NextResponse.json(
           { error: 'Your Dhan token expired — reconnect Dhan.', code: 'BROKER_TOKEN_EXPIRED' },
           { status: 409 },

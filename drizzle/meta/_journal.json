@@ -29,6 +29,13 @@
       "when": 1788347411822,
       "tag": "0003_marvelous_butterfly",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793879619635,
+      "tag": "0004_token_renewal",
+      "breakpoints": true
     }
   ]
 }

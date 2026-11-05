@@ -11,6 +11,12 @@ export interface BrokerStatus {
   status: 'active' | 'token_expired' | 'disconnected' | 'none';
   dhanClientId?: string;
   connectedAt?: string;
+  /** Auto-renewal bookkeeping (docs/plan-token-renewal.md). */
+  tokenExpiresAt?: string | null;
+  renewAfter?: string | null;
+  lastRenewedAt?: string | null;
+  renewFailures?: number;
+  lastRenewError?: string | null;
 }
 
 /** A Dhan position row (fields we rely on; Dhan sends more — passed through). */

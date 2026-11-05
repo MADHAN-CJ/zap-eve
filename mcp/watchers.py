@@ -495,7 +495,7 @@ def _sweep_user(
         report["checked"] += 1
         if not res["ok"]:
             if AUTH_SUSPECT_RE.search(out) and not H.probe_token(creds["dhanClientId"], creds["accessToken"]):
-                H.mark_token_expired(user_id)
+                H.mark_token_expired(user_id, creds["accessToken"])
                 message = BROKER_ERROR_MESSAGES["token_expired"]
                 errored = _error_user_watchers(user_id, message, report)
                 if errored:

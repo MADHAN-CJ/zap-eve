@@ -13,8 +13,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { connectBroker, disconnectBroker, type BrokerStatus } from '@/lib/client/broker';
 
+const IST = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+const ist = (iso?: string | null) => (iso ? `${IST.format(new Date(iso))} IST` : null);
+
 /**
- * Dhan connection (v1: pasted access token, 24h life). Connect validates the
+ * Dhan connection: a pasted access token that the server then RENEWS by itself
+ * every 12 h through Dhan's RenewToken (docs/plan-token-renewal.md), so the
+ * user pastes once. Connect validates the
  * token with a real Dhan round-trip server-side before it's stored — a typo
  * never becomes a "connected" state. The token is encrypted at rest and never
  * returns to the browser.
@@ -82,12 +87,31 @@ export function BrokerModal({
           <DialogTitle>{expired ? 'Reconnect Dhan' : connected ? 'Dhan connection' : 'Connect Dhan'}</DialogTitle>
           <DialogDescription>
             {expired
-              ? 'Your Dhan access token expired (they last 24 hours). Generate a fresh token on Dhan and paste it here.'
+              ? status?.lastRenewError
+                ? `Automatic renewal stopped: ${status.lastRenewError} Generate a fresh token on Dhan and paste it here — renewal resumes by itself.`
+                : 'Your Dhan access token expired. Generate a fresh token on Dhan and paste it here — from then on it renews itself.'
               : connected
-                ? `Connected as ${status?.dhanClientId}. Paste a fresh token to renew, or disconnect.`
-                : 'Generate an access token in Dhan (web → My profile → DhanHQ Trading APIs) and paste it here with your client ID. It stays on the server, encrypted — the AI never sees it.'}
+                ? `Connected as ${status?.dhanClientId}. The token renews itself daily; paste a fresh one only if Dhan asks you to, or disconnect.`
+                : 'Generate an access token in Dhan (web → My profile → DhanHQ Trading APIs) and paste it here with your client ID. It stays on the server, encrypted, and renews itself every day — the AI never sees it.'}
           </DialogDescription>
         </DialogHeader>
+
+        {connected ? (
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
+            <dt className="text-muted-foreground">Renews automatically</dt>
+            <dd>{ist(status?.renewAfter) ?? 'on the next check'}</dd>
+            <dt className="text-muted-foreground">Current token expires</dt>
+            <dd>{ist(status?.tokenExpiresAt) ?? '—'}</dd>
+            <dt className="text-muted-foreground">Last renewed</dt>
+            <dd>{ist(status?.lastRenewedAt) ?? 'not yet (pasted token)'}</dd>
+            {status?.renewFailures ? (
+              <>
+                <dt className="text-muted-foreground">Last attempt</dt>
+                <dd className="text-destructive">{status.lastRenewError ?? 'failed'} (retrying)</dd>
+              </>
+            ) : null}
+          </dl>
+        ) : null}
 
         <div className="space-y-4">
           <div className="space-y-1.5">

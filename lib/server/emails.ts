@@ -117,7 +117,7 @@ export function watchAlertEmail(opts: {
 export function watchPausedEmail(symbol: string, appUrl: string): Email {
   const body =
     p(
-      `Your /markets watch on <strong>${esc(symbol)}</strong> stopped because your Dhan access token expired (Dhan tokens last 24 hours).`,
+      `Your /markets watch on <strong>${esc(symbol)}</strong> stopped because your Dhan connection stopped renewing (the token was revoked or expired).`,
     ) +
     p(button('Reconnect Dhan', appUrl)) +
     muted('Then resume the watch from its chat or the Watchers page.');
@@ -126,8 +126,25 @@ export function watchPausedEmail(symbol: string, appUrl: string): Email {
     subject: '/markets watch paused: reconnect Dhan',
     html: shell(`Your watch on ${symbol} is paused`, 'Reconnect Dhan.', body, footer),
     text:
-      `Your /markets watch on ${symbol} stopped because your Dhan access token expired ` +
-      `(Dhan tokens last 24 hours).\n\nReconnect Dhan from the broker screen, then resume ` +
+      `Your /markets watch on ${symbol} stopped because your Dhan connection stopped renewing ` +
+      `(the token was revoked or expired).\n\nReconnect Dhan from the broker screen, then resume ` +
       `the watch from its chat or the Watchers page:\n${appUrl}\n\n${footer}`,
+  };
+}
+
+/** Auto-renewal could not continue (revoked at Dhan, or the token died first): one email, then we wait for the user. */
+export function brokerReconnectEmail(reason: string, appUrl: string): Email {
+  const body =
+    p('Your Dhan connection to /markets has stopped: the daily token renewal could not continue.') +
+    muted(esc(reason)) +
+    p('Reconnect Dhan once and renewal resumes by itself. Until then your AI assistant can\'t read the account and any watchers are paused.') +
+    p(button('Reconnect Dhan', appUrl));
+  const footer = '/markets is read-only; it can never trade.';
+  return {
+    subject: '/markets: reconnect Dhan',
+    html: shell('Reconnect Dhan to keep /markets running', 'Reconnect Dhan.', body, footer),
+    text:
+      `Your Dhan connection to /markets has stopped: the daily token renewal could not continue.\n\n${reason}\n\n` +
+      `Reconnect Dhan once and renewal resumes by itself:\n${appUrl}\n\n${footer}`,
   };
 }

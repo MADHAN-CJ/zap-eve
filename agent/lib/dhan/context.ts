@@ -101,7 +101,7 @@ export async function toolContext(toolCtx: EveToolCtx | undefined): Promise<Tool
 export async function noteDhanAuthFailure(ctx: DhanToolContext): Promise<void> {
   if (!ctx.userId) return;
   try {
-    await markTokenExpired(ctx.userId);
+    await markTokenExpired(ctx.userId, ctx.creds.accessToken); // only if this token is still the stored one (D3)
   } catch (e) {
     console.error('[dhan] could not mark token expired:', e instanceof Error ? e.message : e);
   }

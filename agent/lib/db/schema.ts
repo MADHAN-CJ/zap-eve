@@ -55,6 +55,19 @@ export const brokerConnections = pgTable('broker_connections', {
   status: text('status').$type<'active' | 'token_expired' | 'disconnected'>().notNull().default('active'),
   connectedAt: timestamp('connected_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  // --- auto-renewal (docs/plan-token-renewal.md) ---
+  /** sha256 prefix of the CURRENT access token: a 401 only expires the row if it came from this token (D3). */
+  credentialFp: text('credential_fp'),
+  tokenIssuedAt: timestamp('token_issued_at', { withTimezone: true }),
+  /** From the JWT `exp` claim (fallback issued + 24 h). */
+  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+  /** The sweep renews once now >= this (issued + BROKER_RENEW_AFTER_HOURS). NULL = legacy row → due. */
+  renewAfter: timestamp('renew_after', { withTimezone: true }),
+  /** Atomic per-row claim: a tick may claim only if NULL or older than the claim window. */
+  lastRenewAttemptAt: timestamp('last_renew_attempt_at', { withTimezone: true }),
+  lastRenewedAt: timestamp('last_renewed_at', { withTimezone: true }),
+  renewFailures: integer('renew_failures').notNull().default(0),
+  lastRenewError: text('last_renew_error'),
 });
 
 /**

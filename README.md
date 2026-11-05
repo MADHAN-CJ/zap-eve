@@ -115,6 +115,11 @@ sequenceDiagram
     P-->>B: NDJSON pass-through
 ```
 
+0. **Dhan tokens renew themselves.** A pasted token is chained through Dhan's
+   `GET /RenewToken` every 12 h by `POST /api/broker/renew-sweep` (external 5-min
+   ticker; state = `broker_connections.renew_after`, no queue). A 401 expires the
+   row only if it came from the CURRENT token (fingerprint guard) — see
+   `docs/plan-token-renewal.md`.
 1. **A /markets 401 only ever means "log in again."** An expired Dhan token is
    broker status, surfaced as a reconnect banner.
 2. **Ownership checked on every session-scoped call.**

@@ -57,3 +57,13 @@ export function decryptSecret(stored: string): string {
   decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
   return Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64')), decipher.final()]).toString('utf8');
 }
+
+/**
+ * Short, stable fingerprint of an access token (sha256 prefix). Stored on the
+ * broker row so a Dhan 401 can prove it came from the CURRENT token before
+ * expiring the row — after an auto-renewal, stale in-flight calls still hold
+ * the old token (docs/plan-token-renewal.md D3). Not a secret, not reversible.
+ */
+export function tokenFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex').slice(0, 16);
+}

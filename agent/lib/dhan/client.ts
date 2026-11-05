@@ -18,6 +18,12 @@ export interface DhanCreds {
   accessToken: string;
 }
 
+export interface RenewTokenResponse {
+  createTime?: string;
+  expiryTime?: string;
+  token?: string;
+}
+
 export class DhanError extends Error {
   constructor(
     message: string,
@@ -124,7 +130,7 @@ async function request<T>(
   creds: DhanCreds,
   op: string,
   path: string,
-  init?: { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number },
+  init?: { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number; headers?: Record<string, string> },
 ): Promise<T> {
   let res: Response;
   try {
@@ -135,6 +141,7 @@ async function request<T>(
         Accept: 'application/json',
         'access-token': creds.accessToken,
         'client-id': creds.dhanClientId,
+        ...(init?.headers ?? {}),
       },
       body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
       signal: AbortSignal.timeout(init?.timeoutMs ?? 15000),
@@ -175,6 +182,13 @@ export const dhan = {
   getPositions: (creds: DhanCreds) => request<Record<string, unknown>[]>(creds, 'getPositions', '/positions'),
   getHoldings: (creds: DhanCreds) => request<Record<string, unknown>[]>(creds, 'getHoldings', '/holdings'),
   getFundLimit: (creds: DhanCreds) => request<Record<string, unknown>>(creds, 'getFundLimit', '/fundlimit'),
+  /**
+   * `GET /v2/RenewToken`: a fresh 24 h access token for a LIVE one; Dhan kills
+   * the old token at once and refuses to renew an expired one. Header is
+   * `dhanClientId` here (the trading header), sent alongside the usual pair.
+   */
+  renewToken: (creds: DhanCreds) =>
+    request<RenewTokenResponse>(creds, 'renewToken', '/RenewToken', { headers: { dhanClientId: creds.dhanClientId } }),
   getOrderBook: (creds: DhanCreds) => request<Record<string, unknown>[]>(creds, 'getOrderBook', '/orders'),
   getTradeBook: (creds: DhanCreds) => request<Record<string, unknown>[]>(creds, 'getTradeBook', '/trades'),
 

@@ -264,8 +264,23 @@ def get_active_broker_creds(user_id: str) -> dict[str, Any]:
         return {"status": "error"}
 
 
-def mark_token_expired(user_id: str) -> None:
-    _pg_run("UPDATE broker_connections SET status = 'token_expired', updated_at = now() WHERE user_id = %s", (user_id,))
+def token_fingerprint(token: str) -> str:
+    """sha256 prefix — mirrors agent/lib/db/crypto.ts tokenFingerprint (docs/plan-token-renewal.md D3)."""
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def mark_token_expired(user_id: str, failed_access_token: str | None = None) -> None:
+    """Expire the row ONLY if it still holds the token that failed (or is a legacy
+    row without a fingerprint): after an auto-renewal a stale in-flight script
+    must never expire the fresh token."""
+    if failed_access_token is None:
+        _pg_run("UPDATE broker_connections SET status = 'token_expired', updated_at = now() WHERE user_id = %s AND status = 'active'", (user_id,))
+        return
+    _pg_run(
+        "UPDATE broker_connections SET status = 'token_expired', updated_at = now() "
+        "WHERE user_id = %s AND status = 'active' AND (credential_fp IS NULL OR credential_fp = %s)",
+        (user_id, token_fingerprint(failed_access_token)),
+    )
 
 
 def _send_otp_email(email: str, code: str) -> None:
@@ -583,7 +598,7 @@ def probe_token(dhan_client_id: str, access_token: str) -> bool:
 
 BROKER_MESSAGES = {
     "not_connected": "You haven't connected Dhan to your /markets account yet. Open {app} → Broker and connect Dhan, then try again.",
-    "token_expired": "Your Dhan token has expired (Dhan tokens last 24h). Open {app} → Broker and reconnect Dhan, then try again.",
+    "token_expired": "Your Dhan connection stopped renewing (the token was revoked or expired). Open {app} → Broker and reconnect Dhan once — it renews itself daily after that.",
     "disconnected": "Dhan is disconnected from your /markets account. Open {app} → Broker and reconnect, then try again.",
     "error": "Could not read your broker connection just now — try again in a moment.",
 }
@@ -650,7 +665,7 @@ def build_server():
         if _AUTH_SUSPECT_RE.search(out):
             alive = await anyio.to_thread.run_sync(probe_token, creds["dhanClientId"], creds["accessToken"])
             if not alive:
-                await anyio.to_thread.run_sync(mark_token_expired, access.subject)
+                await anyio.to_thread.run_sync(mark_token_expired, access.subject, creds["accessToken"])
                 out += "\n\n[" + BROKER_MESSAGES["token_expired"].format(app=app_url()) + "]"
         return out
 
