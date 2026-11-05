@@ -9,9 +9,10 @@ const LIVE = new Set(['ARMED', 'PAUSED', 'ERROR']);
 
 /**
  * The sidebar "Watchers" page: every market watch the user has, live ones
- * first, with pause/resume/cancel and a link into the owning chat.
+ * first, with pause/resume/cancel. (CHAT: used to link into the owning chat —
+ * pass `onOpenThread` again to restore the "Open chat" link on each card.)
  */
-export function WatchersPage({ onOpenThread }: { readonly onOpenThread: (threadId: string) => void }) {
+export function WatchersPage({ onOpenThread }: { readonly onOpenThread?: (threadId: string) => void }) {
   const [watches, setWatches] = useState<WatchSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,9 +45,8 @@ export function WatchersPage({ onOpenThread }: { readonly onOpenThread: (threadI
             <RadarIcon className="size-5" /> Watchers
           </h2>
           <p className="text-muted-foreground text-sm">
-            Background market watches armed from your chats. They poll during market hours and email
-            you when the AI confirms a trigger is real. Ask the analyst in any position chat to set
-            one up.
+            Checks your AI assistant set up for you. They run during market hours and email you
+            when the AI confirms a trigger is real. Ask Claude through the connector to create one.
           </p>
         </div>
 
@@ -54,7 +54,7 @@ export function WatchersPage({ onOpenThread }: { readonly onOpenThread: (threadI
         {watches === null && !error ? <p className="text-muted-foreground text-sm">Loading…</p> : null}
         {watches !== null && watches.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            No watches yet — open a position chat and ask for one.
+            No watches yet. Ask your AI: “Alert me when NIFTY crosses 25,000.”
           </p>
         ) : null}
 

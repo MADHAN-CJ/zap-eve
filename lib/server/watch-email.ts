@@ -40,7 +40,7 @@ export async function sendWatchEmail(opts: {
   }
 }
 
-const appUrl = () => process.env.APP_BASE_URL || 'https://zap-eve.vercel.app';
+const appUrl = () => process.env.APP_BASE_URL || 'https://dhan-test.slash.markets';
 
 export function alertEmail(
   symbol: string,

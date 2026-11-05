@@ -1,61 +1,56 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  LayoutListIcon,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
-  RadarIcon,
-  Trash2Icon,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { LayoutListIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, RadarIcon } from 'lucide-react';
 import { Logomark, Wordmark } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+/* CHAT DISABLED (2026-11-05): the grouped chat history is commented out — the
+ * dashboard is a Claude connector only (see workspace.tsx). Blocks marked CHAT
+ * restore it.
+import { useMemo } from 'react';
+import { ChevronDownIcon, ChevronRightIcon, Trash2Icon } from 'lucide-react';
 import { positionKey, type PositionRef, type ThreadSummary } from '@/lib/client/threads-api';
 import { EditableTitle } from './editable-title';
+*/
 
 const RAIL_COLLAPSED_KEY = 'zap-eve:sidebar-collapsed';
 
+/* CHAT:
 interface PositionGroup {
   key: string;
   position: PositionRef;
   threads: ThreadSummary[];
   latest: string;
 }
+*/
 
 /**
- * Chat history grouped by position: a collapsible header per position (tap →
- * that position's hub) with its threads nested, newest first. Closed
- * positions keep their group — chats are never auto-removed.
+ * Navigation rail: Positions + Watchers. (CHAT: used to also list chat history
+ * grouped by position — a collapsible header per position with its threads
+ * nested, newest first.)
  */
 export function Sidebar({
-  threads,
-  activeId,
-  activePositionKey,
   homeActive,
   watchersActive,
   onHome,
   onWatchers,
-  onSelect,
-  onSelectPosition,
-  onDelete,
-  onRename,
 }: {
-  readonly threads: ThreadSummary[];
-  readonly activeId: string;
-  readonly activePositionKey: string | null;
   readonly homeActive: boolean;
   readonly watchersActive: boolean;
   readonly onHome: () => void;
   readonly onWatchers: () => void;
+  /* CHAT:
+  readonly threads: ThreadSummary[];
+  readonly activeId: string;
+  readonly activePositionKey: string | null;
   readonly onSelect: (id: string) => void;
   readonly onSelectPosition: (position: PositionRef) => void;
   readonly onDelete: (id: string) => void;
   readonly onRename: (id: string, title: string) => void | Promise<void>;
+  */
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // CHAT: const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [railCollapsed, setRailCollapsed] = useState(false);
 
   useEffect(() => {
@@ -77,6 +72,7 @@ export function Sidebar({
       return next;
     });
 
+  /* CHAT: thread grouping.
   const groups = useMemo<PositionGroup[]>(() => {
     const byKey = new Map<string, PositionGroup>();
     for (const t of threads) {
@@ -97,6 +93,7 @@ export function Sidebar({
       else next.add(key);
       return next;
     });
+  */
 
   return (
     <aside
@@ -189,6 +186,7 @@ export function Sidebar({
         </Button>
       </div>
 
+      {/* CHAT: grouped chat history (Positions/Watchers nav above stays).
       <p className="px-4 pt-5 pb-1 font-medium text-muted-foreground text-xs tracking-wider">CHATS</p>
 
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-3">
@@ -239,7 +237,7 @@ export function Sidebar({
                           )}
                           key={t.id}
                         >
-                          {/* div, not button: EditableTitle nests its own rename button */}
+                          {/* div, not button: EditableTitle nests its own rename button *\/}  (restore the slash when uncommenting)
                           <div
                             className="min-w-0 flex-1 cursor-pointer py-1.5 text-left text-sm"
                             onClick={() => onSelect(t.id)}
@@ -273,6 +271,7 @@ export function Sidebar({
           })
         )}
       </nav>
+      */}
       </div>
     </aside>
   );
